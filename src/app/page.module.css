@@ -955,11 +955,30 @@
 /* 全屏模式 */
 .graphFullscreen {
   background: #f8f9fa;
+  position: relative;
 }
 
 .graphFullscreen .graphSvg {
   width: 100vw;
   height: 100vh;
+}
+
+.graphFullscreen .graphTooltip {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+}
+
+.graphFullscreen .zoomControls {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+}
+
+.graphFullscreen .graphLegend {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
 }
 
 .graphNode {
