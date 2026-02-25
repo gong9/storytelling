@@ -529,6 +529,12 @@ export class RLMReader {
           return `错误：覆盖率不足 ${minCoveragePercent}%（当前 ${coverage}%）。未读块: ${rangeHint}。请使用 spawn_reader 阅读这些未读块，然后再调用 done。`;
         }
         
+        // 检查是否已生成输出
+        if (!this.output || this.output.length < 100) {
+          console.log(`  ❌ 拒绝：尚未生成输出（当前 ${(this.output || '').length} 字）`);
+          return `错误：你还没有调用 update_output() 保存输出！请先根据阅读内容生成完整输出，调用 update_output(你的输出内容) 保存，然后再调用 done()。`;
+        }
+        
         console.log(`  ✓ 任务完成`);
         return '任务已完成。请不要再调用任何工具。';
       }),

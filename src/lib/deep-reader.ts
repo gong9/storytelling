@@ -309,41 +309,13 @@ export class DeepReader {
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
-        purpose: '全面阅读文档后，完成三项任务：1）提取核心背景信息；2）构建人物关系图谱；3）根据内容语义智能划分章节。',
+        purpose: '全面阅读文档，根据内容语义智能划分章节。人物关系图谱由子 Agent 在阅读过程中增量提取，你只需专注于章节划分。',
         outputFormat: `
-## 时代背景
-（简述故事发生的时代、地点）
-
-## 主要人物
-（列出 5-10 个主要人物，简述身份和关系，用于后续改编参考）
-
-## 情节主线
-（简述故事主线，3-5 句话）
-
-## 人物关系图谱
-用 JSON 格式输出人物、关系、关键事件（必须是合法 JSON）：
-\`\`\`json
-{
-  "characters": [
-    {"id": "zhu_yuanzhang", "name": "朱元璋", "aliases": ["重八", "朱重八"], "role": "protagonist", "description": "布衣出身，后成明朝开国皇帝"},
-    {"id": "ma_xiuying", "name": "马皇后", "aliases": ["马秀英"], "role": "supporting", "description": "朱元璋发妻，贤德善良"}
-  ],
-  "relationships": [
-    {"from": "zhu_yuanzhang", "to": "ma_xiuying", "type": "夫妻", "description": "患难与共的发妻"}
-  ],
-  "events": [
-    {"id": "join_hongyin", "name": "投奔红巾军", "characters": ["zhu_yuanzhang"], "description": "朱元璋投军郭子兴麾下"}
-  ]
-}
-\`\`\`
-要求：
-- id 用英文小写+下划线，便于程序处理
-- role 只能是 protagonist（主角）、antagonist（反派）、supporting（配角）三种
-- 人物控制在 10-15 个，关系控制在 10-20 条，事件控制在 5-10 个
-- 只提取主要人物和关键事件，不要过于琐碎
-
 ## 章节划分
-请根据内容语义将全文划分为若干章节。要求：
+
+请根据内容语义将全文划分为若干章节。
+
+要求：
 - 每章 10000-20000 字为宜（不要太短也不要太长）
 - 跳过目录、版权页、序言、附录等非正文内容
 - 按故事情节的自然段落来划分，不必完全遵循原书章节
@@ -357,7 +329,15 @@ export class DeepReader {
 ]
 \`\`\`
 
-注意：startChunk 和 endChunk 是你阅读过的块编号（从 1 开始）。确保所有正文块都被覆盖，不要遗漏。
+注意：
+- startChunk 和 endChunk 是你阅读过的块编号（从 1 开始）
+- 确保所有正文块都被覆盖，不要遗漏
+- 章节数量根据文档长度灵活调整，通常 5-20 章
+
+⚠️ 必须执行：
+1. 读完全部内容后，生成章节划分 JSON
+2. 调用 update_output(你的章节划分输出) 保存
+3. 调用 done() 结束任务
 `,
       },
       model: this.config.model,
@@ -368,40 +348,14 @@ export class DeepReader {
     const result = await reader.read({ content, title });
     const output = result.content || '';
 
-    // 分离各个部分：全局上下文 | 人物关系图谱 | 章节划分
-    const graphSectionIdx = output.indexOf('## 人物关系图谱');
-    const chapterSectionIdx = output.indexOf('## 章节划分');
-
-    let contextText = output;
-    let graphJson = '';
-    let chaptersJson = '';
-
-    if (graphSectionIdx > -1 && chapterSectionIdx > -1) {
-      // 全局上下文：从开头到人物关系图谱之前
-      contextText = output.slice(0, graphSectionIdx).trim();
-      // 图谱 JSON：从人物关系图谱到章节划分之前
-      graphJson = output.slice(graphSectionIdx, chapterSectionIdx);
-      // 章节 JSON：从章节划分到结尾
-      chaptersJson = output.slice(chapterSectionIdx);
-    } else if (chapterSectionIdx > -1) {
-      // 没有图谱，只有章节划分
-      contextText = output.slice(0, chapterSectionIdx).trim();
-      chaptersJson = output.slice(chapterSectionIdx);
-    }
-
-    console.log(`[DeepReader] 全局上下文: ${contextText.length} 字`);
-
-    // 解析知识图谱 JSON
-    const knowledgeGraph = this.parseKnowledgeGraph(graphJson);
-    if (knowledgeGraph) {
-      console.log(`[DeepReader] 知识图谱: ${knowledgeGraph.characters.length} 人物, ${knowledgeGraph.relationships.length} 关系, ${knowledgeGraph.events.length} 事件`);
-    }
-
-    // 解析章节 JSON
-    const chapters = this.parseChapterPlan(chaptersJson, content);
+    // 主 Agent 现在只输出章节划分，人物关系图谱由子 Agent 增量提取
+    // 直接解析章节 JSON
+    const chapters = this.parseChapterPlan(output, content);
     console.log(`[DeepReader] 智能章节划分: ${chapters.length} 章`);
 
-    return { context: contextText, chapters, knowledgeGraph };
+    // 知识图谱不再从主 Agent 输出解析，而是从增量更新中获取
+    // 这里返回 undefined，由前端合并增量图谱数据
+    return { context: '', chapters, knowledgeGraph: undefined };
   }
 
   /**
