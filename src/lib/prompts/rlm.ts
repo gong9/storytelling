@@ -144,6 +144,7 @@ ${principlesSection}`;
 
 const INIT_MESSAGE_TEMPLATE = readPromptFile('runtime/init-message.txt');
 const SUB_READER_TEMPLATE = readPromptFile('runtime/sub-reader.txt');
+const GRAPH_MERGER_TEMPLATE = readPromptFile('runtime/graph-merger.txt');
 
 /**
  * 构建初始化消息
@@ -169,6 +170,17 @@ export function buildSubReaderPrompt(question: string, content: string): string 
  */
 export function formatChunkContent(index: number, content: string): string {
   return `【块 ${index}】\n${content}`;
+}
+
+/**
+ * 构建图谱整合提示词
+ * @param characters 原始人物列表 JSON
+ * @param relationships 原始关系列表 JSON
+ */
+export function buildGraphMergerPrompt(characters: string, relationships: string): string {
+  return GRAPH_MERGER_TEMPLATE
+    .replace('{{characters}}', characters)
+    .replace('{{relationships}}', relationships);
 }
 
 // ==================== 错误/状态消息 ====================

@@ -19,6 +19,7 @@ import {
   buildRLMPrompt,
   buildInitMessage,
   buildSubReaderPrompt,
+  buildGraphMergerPrompt,
   formatChunkContent,
   RLM_MESSAGES,
   TASK_STUDY_NOTES,
@@ -464,6 +465,89 @@ export class RLMReader {
   }
 
   /**
+   * 使用 LLM 整合碎片化的知识图谱
+   * - 合并同一人物的不同称呼
+   * - 重新评估人物重要性
+   * - 去除冗余/矛盾的关系
+   */
+  async mergeKnowledgeGraph(rawGraph: KnowledgeGraph): Promise<KnowledgeGraph> {
+    // 如果数据太少，不需要整合
+    if (rawGraph.characters.length < 5) {
+      console.log('[RLM] 图谱数据较少，跳过整合');
+      return rawGraph;
+    }
+
+    console.log('[RLM] 开始整合知识图谱...');
+    const startTime = Date.now();
+
+    try {
+      const llm = this.createLLM(this.config.subAgentModel);
+      
+      // 构建整合提示词
+      const prompt = buildGraphMergerPrompt(
+        JSON.stringify(rawGraph.characters, null, 2),
+        JSON.stringify(rawGraph.relationships, null, 2)
+      );
+
+      // 单次 LLM 调用
+      const response = await llm.invoke([
+        { role: 'user', content: prompt }
+      ]);
+
+      const content = typeof response.content === 'string' 
+        ? response.content 
+        : JSON.stringify(response.content);
+
+      // 解析返回的 JSON
+      const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn('[RLM] 图谱整合返回格式错误，使用原始数据');
+        return rawGraph;
+      }
+
+      const jsonStr = jsonMatch[1] || jsonMatch[0];
+      const merged = JSON.parse(jsonStr) as {
+        characters: Character[];
+        relationships: Relationship[];
+        summary?: string;
+      };
+
+      // 验证基本结构
+      if (!Array.isArray(merged.characters) || merged.characters.length === 0) {
+        console.warn('[RLM] 图谱整合结果无效，使用原始数据');
+        return rawGraph;
+      }
+
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[RLM] 图谱整合完成: ${rawGraph.characters.length} → ${merged.characters.length} 人物, ${rawGraph.relationships.length} → ${merged.relationships.length} 关系 (${duration}s)`);
+      
+      if (merged.summary) {
+        console.log(`[RLM] 故事概要: ${merged.summary}`);
+      }
+
+      return {
+        characters: merged.characters.map(c => ({
+          id: c.id,
+          name: c.name,
+          aliases: c.aliases || [],
+          role: c.role || 'supporting',
+          description: c.description || '',
+        })),
+        relationships: merged.relationships.map(r => ({
+          from: r.from,
+          to: r.to,
+          type: r.type,
+          description: r.description || '',
+        })),
+        events: rawGraph.events, // 保留原始事件
+      };
+    } catch (error) {
+      console.error('[RLM] 图谱整合失败:', error instanceof Error ? error.message : error);
+      return rawGraph;
+    }
+  }
+
+  /**
    * 更新输出
    */
   private updateOutput(content: string): string {
@@ -642,11 +726,17 @@ export class RLMReader {
       );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      const collectedGraph = this.getCollectedGraph();
+      const rawGraph = this.getCollectedGraph();
       console.log('');
       console.log('========== RLM 阅读完成 ==========');
       console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒, 输出 ${(this.output || '').length.toLocaleString()} 字`);
-      console.log(`图谱: ${collectedGraph.characters.length} 人物, ${collectedGraph.relationships.length} 关系`);
+      console.log(`原始图谱: ${rawGraph.characters.length} 人物, ${rawGraph.relationships.length} 关系`);
+      
+      // 使用 LLM 整合图谱（合并别名、去重、评估重要性）
+      const mergedGraph = rawGraph.characters.length > 0 
+        ? await this.mergeKnowledgeGraph(rawGraph)
+        : undefined;
+      
       console.log('');
       
       return {
@@ -655,7 +745,7 @@ export class RLMReader {
           totalChunks: this.chunks.length,
           task: this.config.task.purpose,
         },
-        knowledgeGraph: collectedGraph.characters.length > 0 ? collectedGraph : undefined,
+        knowledgeGraph: mergedGraph,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -668,12 +758,18 @@ export class RLMReader {
       
       // 如果是递归限制错误，返回当前已有的输出
       if (errorMessage.includes('GRAPH_RECURSION_LIMIT') || errorMessage.includes('Recursion limit')) {
-        const collectedGraph = this.getCollectedGraph();
+        const rawGraph = this.getCollectedGraph();
         console.log('');
         console.log('========== RLM 达到递归限制 ==========');
         console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒, 当前输出 ${(this.output || '').length.toLocaleString()} 字`);
-        console.log(`图谱: ${collectedGraph.characters.length} 人物, ${collectedGraph.relationships.length} 关系`);
+        console.log(`原始图谱: ${rawGraph.characters.length} 人物, ${rawGraph.relationships.length} 关系`);
         console.log('提示: 已达到最大循环次数，返回当前结果');
+        
+        // 使用 LLM 整合图谱
+        const mergedGraph = rawGraph.characters.length > 0 
+          ? await this.mergeKnowledgeGraph(rawGraph)
+          : undefined;
+        
         console.log('');
         
         return {
@@ -683,7 +779,7 @@ export class RLMReader {
             task: this.config.task.purpose,
             warning: '达到递归限制，结果可能不完整',
           },
-          knowledgeGraph: collectedGraph.characters.length > 0 ? collectedGraph : undefined,
+          knowledgeGraph: mergedGraph,
         };
       }
       
