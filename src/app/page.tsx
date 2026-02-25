@@ -182,7 +182,13 @@ function SpeakerIcon({ className }: { className?: string }) {
 // ==================== 知识图谱面板 ====================
 
 function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | null; isLoading?: boolean }) {
-  if (isLoading) {
+  // 没有数据且不在加载：不显示
+  if (!graph && !isLoading) {
+    return null;
+  }
+
+  // 没有数据但在加载：显示空白 loading
+  if (!graph || graph.characters.length === 0) {
     return (
       <div className={styles.graphPanel}>
         <div className={styles.graphHeader}>
@@ -194,10 +200,6 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
         </div>
       </div>
     );
-  }
-
-  if (!graph || graph.characters.length === 0) {
-    return null;
   }
 
   const { characters, relationships } = graph;
@@ -230,6 +232,7 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
         <span className={styles.graphTitle}>人物关系图谱</span>
         <span className={styles.graphStats}>
           {characters.length} 人物 · {relationships.length} 关系
+          {isLoading && <span className={styles.graphLoading}> · 构建中</span>}
         </span>
       </div>
       <div className={styles.graphContainer}>
@@ -659,6 +662,34 @@ export default function Home() {
           const graphData = event.data as KnowledgeGraph;
           setKnowledgeGraph(graphData);
           addLog(`知识图谱: ${graphData.characters.length} 人物, ${graphData.relationships.length} 关系`, 'stage');
+        }
+
+        // 增量图谱更新（边读边构建）
+        if (type === 'graph_update') {
+          const update = event.data as { characters?: KGCharacter[]; relationships?: KGRelationship[] };
+          setKnowledgeGraph((prev) => {
+            const base: KnowledgeGraph = prev || { characters: [], relationships: [], events: [] };
+            
+            // 合并人物（按 id 去重）
+            const existingIds = new Set(base.characters.map(c => c.id));
+            const newChars = (update.characters || []).filter(c => c.id && !existingIds.has(c.id));
+            
+            // 合并关系（按 from+to+type 去重）
+            const existingRels = new Set(base.relationships.map(r => `${r.from}-${r.to}-${r.type}`));
+            const newRels = (update.relationships || []).filter(r => 
+              r.from && r.to && !existingRels.has(`${r.from}-${r.to}-${r.type}`)
+            );
+            
+            if (newChars.length === 0 && newRels.length === 0) {
+              return prev;
+            }
+            
+            return {
+              ...base,
+              characters: [...base.characters, ...newChars],
+              relationships: [...base.relationships, ...newRels],
+            };
+          });
         }
 
         if (type === 'done') {

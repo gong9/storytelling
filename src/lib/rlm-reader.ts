@@ -351,10 +351,53 @@ export class RLMReader {
       
       console.log(`  -> 子Agent返回 ${answer.length.toLocaleString()} 字`);
       
+      // 解析增量人物/关系数据
+      this.parseAndLogGraphUpdate(answer);
+      
       return answer;
     } catch (error) {
       console.error(`  -> 子Agent出错: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return RLM_MESSAGES.READER_ERROR(error instanceof Error ? error.message : 'Unknown error');
+    }
+  }
+
+  /**
+   * 解析子 Agent 返回中的人物/关系数据，并通过特殊日志格式输出
+   */
+  private parseAndLogGraphUpdate(answer: string): void {
+    try {
+      // 提取 ```characters [...] ```
+      const charsMatch = answer.match(/```characters\s*([\s\S]*?)```/);
+      // 提取 ```relationships [...] ```
+      const relsMatch = answer.match(/```relationships\s*([\s\S]*?)```/);
+
+      let characters: unknown[] = [];
+      let relationships: unknown[] = [];
+
+      if (charsMatch) {
+        try {
+          characters = JSON.parse(charsMatch[1].trim());
+        } catch {
+          // 解析失败，忽略
+        }
+      }
+
+      if (relsMatch) {
+        try {
+          relationships = JSON.parse(relsMatch[1].trim());
+        } catch {
+          // 解析失败，忽略
+        }
+      }
+
+      // 只有有数据时才输出特殊日志（会被 init API 捕获）
+      if ((Array.isArray(characters) && characters.length > 0) || 
+          (Array.isArray(relationships) && relationships.length > 0)) {
+        // 使用特殊前缀，便于 init API 识别
+        console.log(`[GRAPH_UPDATE] ${JSON.stringify({ characters, relationships })}`);
+      }
+    } catch {
+      // 解析失败，静默忽略
     }
   }
 

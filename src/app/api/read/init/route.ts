@@ -53,6 +53,18 @@ export async function POST(request: NextRequest) {
           return;
         }
 
+        // 匹配增量图谱更新 [GRAPH_UPDATE] {...}
+        if (msg.includes('[GRAPH_UPDATE]')) {
+          const jsonStr = msg.replace(/.*\[GRAPH_UPDATE\]\s*/, '').trim();
+          try {
+            const graphData = JSON.parse(jsonStr);
+            send({ type: 'graph_update', data: graphData });
+          } catch {
+            // 解析失败，忽略
+          }
+          return;
+        }
+
         // 匹配关键阶段
         if (msg.includes('RLM 文档阅读开始')) {
           send({ type: 'stage', stage: 'context', message: '正在生成全局上下文...' });

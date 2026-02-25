@@ -2,3 +2,20 @@
 
 相关内容：
 {{content}}
+
+---
+
+回答完问题后，请在答案末尾追加人物提取（如果本段有新出现的人物或关系）：
+
+```characters
+[{"id": "人物id", "name": "姓名", "role": "protagonist/antagonist/supporting", "description": "一句话描述"}]
+```
+
+```relationships
+[{"from": "人物id", "to": "人物id", "type": "关系类型", "description": "关系描述"}]
+```
+
+注意：
+- 只提取本段**新出现**的重要人物（次要路人不用提取）
+- id 用小写英文+下划线，如 zhu_yuanzhang
+- 如果本段没有新人物/关系，可以不输出这两个代码块
