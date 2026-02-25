@@ -151,6 +151,20 @@ function SpeakerIcon({ className }: { className?: string }) {
 
 // ==================== 预览分段组件 ====================
 
+interface Subtitle {
+  text: string;
+  start: number;
+  end: number;
+}
+
+interface TtsData {
+  status: TtsStatus;
+  path?: string;
+  subtitles?: Subtitle[];
+  error?: string;
+  progressMsg?: string;
+}
+
 type TtsStatus = 'idle' | 'loading' | 'done' | 'playing' | 'error';
 
 function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
@@ -160,25 +174,35 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
   initialTts?: Record<string, string>;
 }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
-  // 从 session 恢复已生成的 TTS 状态
-  const [ttsMap, setTtsMap] = useState<Record<number, { status: TtsStatus; path?: string; error?: string }>>(() => {
+
+  // 从 session 恢复已生成的 TTS 状态（现在 value 是 JSON 字符串）
+  const [ttsMap, setTtsMap] = useState<Record<number, TtsData>>(() => {
     if (!initialTts) return {};
-    const restored: Record<number, { status: TtsStatus; path?: string }> = {};
-    for (const [key, audioPath] of Object.entries(initialTts)) {
-      // key 格式: "chapterIdx:sectionIdx"
+    const restored: Record<number, TtsData> = {};
+    for (const [key, value] of Object.entries(initialTts)) {
       const parts = key.split(':');
       if (parts.length === 2 && parseInt(parts[0]) === chapterIdx) {
         const sectionIdx = parseInt(parts[1]);
-        restored[sectionIdx] = { status: 'done', path: audioPath };
+        try {
+          const parsed = JSON.parse(value);
+          restored[sectionIdx] = { status: 'done', path: parsed.audioPath, subtitles: parsed.subtitles };
+        } catch {
+          // 兼容旧格式（纯 audioPath 字符串）
+          restored[sectionIdx] = { status: 'done', path: value };
+        }
       }
     }
     return restored;
   });
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingIdx, setPlayingIdx] = useState<number | null>(null);
+  const [activeSubIdx, setActiveSubIdx] = useState(-1);
+  const subtitleRefs = useRef<Record<number, HTMLSpanElement | null>>({});
 
+  // 合成（SSE）
   const handleTts = useCallback(async (idx: number, title: string, body: string) => {
-    setTtsMap((prev) => ({ ...prev, [idx]: { status: 'loading' } }));
+    setTtsMap((prev) => ({ ...prev, [idx]: { status: 'loading', progressMsg: '提交中...' } }));
 
     try {
       const episodeKey = `${chapterIdx}:${idx}`;
@@ -188,10 +212,34 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
         body: JSON.stringify({ text: body, title, speed: 1.3, sessionId, episodeKey }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error);
+      }
 
-      setTtsMap((prev) => ({ ...prev, [idx]: { status: 'done', path: data.audioPath } }));
+      // SSE 解析
+      await readSSE(res, (event) => {
+        const type = event.type as string;
+        if (type === 'progress') {
+          setTtsMap((prev) => ({
+            ...prev,
+            [idx]: { ...prev[idx], status: 'loading', progressMsg: event.message as string },
+          }));
+        }
+        if (type === 'done') {
+          setTtsMap((prev) => ({
+            ...prev,
+            [idx]: {
+              status: 'done',
+              path: event.audioPath as string,
+              subtitles: (event.subtitles as Subtitle[]) || [],
+            },
+          }));
+        }
+        if (type === 'error') {
+          throw new Error(event.error as string);
+        }
+      });
     } catch (err) {
       setTtsMap((prev) => ({
         ...prev,
@@ -200,8 +248,8 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
     }
   }, [sessionId, chapterIdx]);
 
+  // 播放 + 字幕同步
   const handlePlay = useCallback((idx: number, audioPath: string) => {
-    // 停止当前播放
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -209,16 +257,42 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
 
     if (playingIdx === idx) {
       setPlayingIdx(null);
+      setActiveSubIdx(-1);
       return;
     }
 
+    setOpenIdx(idx);
+
     const audio = new Audio(`/api/read/output?path=${encodeURIComponent(audioPath)}&raw=1`);
-    audio.onended = () => setPlayingIdx(null);
-    audio.onerror = () => setPlayingIdx(null);
+    const tts = ttsMap[idx];
+    const subs = tts?.subtitles || [];
+
+    audio.ontimeupdate = () => {
+      if (subs.length === 0) return;
+      const t = audio.currentTime;
+      // 找当前句
+      let found = -1;
+      for (let i = 0; i < subs.length; i++) {
+        if (t >= subs[i].start && t < subs[i].end) {
+          found = i;
+          break;
+        }
+      }
+      if (found !== activeSubIdx) {
+        setActiveSubIdx(found);
+        // 自动滚动到当前字幕
+        if (found >= 0 && subtitleRefs.current[found]) {
+          subtitleRefs.current[found]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+    };
+
+    audio.onended = () => { setPlayingIdx(null); setActiveSubIdx(-1); };
+    audio.onerror = () => { setPlayingIdx(null); setActiveSubIdx(-1); };
     audio.play();
     audioRef.current = audio;
     setPlayingIdx(idx);
-  }, [playingIdx]);
+  }, [playingIdx, ttsMap, activeSubIdx]);
 
   if (!content || content === '未找到该章节内容' || content === '加载失败') {
     return <div className={styles.previewLoading}>{content}</div>;
@@ -276,7 +350,7 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
                   </button>
                 )}
                 {tts?.status === 'loading' && (
-                  <div className={styles.ttsBtnLoading}>
+                  <div className={styles.ttsBtnLoading} title={tts.progressMsg}>
                     <div className={styles.spinnerSmall} />
                   </div>
                 )}
@@ -310,7 +384,21 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
               </div>
             </div>
             {isOpen && (
-              <pre className={styles.sectionBody}>{sec.body}</pre>
+              playingIdx === i && tts?.subtitles && tts.subtitles.length > 0 ? (
+                <div className={styles.subtitlePanel}>
+                  {tts.subtitles.map((sub, si) => (
+                    <span
+                      key={si}
+                      ref={(el) => { subtitleRefs.current[si] = el; }}
+                      className={`${styles.subtitleLine} ${activeSubIdx === si ? styles.subtitleActive : ''}`}
+                    >
+                      {sub.text}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <pre className={styles.sectionBody}>{sec.body}</pre>
+              )
             )}
           </div>
         );
