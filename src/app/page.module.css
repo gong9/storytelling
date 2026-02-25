@@ -329,6 +329,24 @@
   font-size: 15px;
   font-weight: 600;
   color: #171717;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.liveTag {
+  font-size: 11px;
+  font-weight: 500;
+  color: #b8860b;
+  background: rgba(184, 134, 11, 0.1);
+  padding: 1px 8px;
+  border-radius: 10px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .readerBody {
@@ -670,6 +688,33 @@
   font-weight: 500;
   margin-top: 6px;
   margin-bottom: 2px;
+}
+
+/* ==================== 字幕面板 ==================== */
+
+.subtitlePanel {
+  padding: 16px 20px 20px;
+  max-height: 400px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subtitleLine {
+  display: block;
+  font-size: 15px;
+  line-height: 1.8;
+  color: #a3a3a3;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.3s, background 0.3s;
+}
+
+.subtitleActive {
+  color: #171717;
+  background: #fdfbf3;
+  font-weight: 500;
 }
 
 /* ==================== 历史记录 ==================== */

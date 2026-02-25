@@ -15,6 +15,8 @@ export interface SpawnWriterResult {
   segmentId: number;
   content: string;
   charCount: number;
+  /** 实际生成的完整文本（不返回给 Agent，仅供 SSE 推送） */
+  generatedText?: string;
 }
 
 /**
@@ -31,7 +33,9 @@ export function createSpawnWriterTool(
         sceneTitle: input.sceneTitle,
         writingHints: input.writingHints,
       });
-      return JSON.stringify(result);
+      // 不把 generatedText 返回给 Agent（太长），只返回摘要信息
+      const { generatedText: _, ...agentResult } = result;
+      return JSON.stringify(agentResult);
     },
     {
       name: 'spawn_writer',

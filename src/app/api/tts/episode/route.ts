@@ -1,10 +1,12 @@
 /**
- * 单回 TTS 合成 API
+ * 单回 TTS 合成 API（同步快速 + ASR 字幕）
  *
  * POST /api/tts/episode
- * Body: { text: string, title?: string, speed?: number }
+ * Body: { text, title?, speed?, sessionId?, episodeKey? }
  *
- * 接收单回文本，清洗后合成音频，返回音频文件路径
+ * 1. MiniMax 同步 TTS 合成音频（快，几秒）
+ * 2. DashScope Paraformer 语音识别获取逐句时间戳（快，几秒）
+ * 3. 返回 audioPath + subtitles
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,16 +16,22 @@ import { cleanForTTS } from '@/lib/deep-reader';
 import { getSession, updateSession } from '@/lib/session-store';
 
 const MINIMAX_API_BASE = 'https://api.minimaxi.com';
+const DASHSCOPE_API_BASE = 'https://dashscope.aliyuncs.com/api/v1';
 
-function getApiKey(): string {
+function getMinimaxKey(): string {
   const apiKey = process.env.MINIMAX_API_KEY;
   if (!apiKey) throw new Error('MINIMAX_API_KEY 未配置');
   return apiKey;
 }
 
-function getActiveVoiceId(): string {
-  return 'audiobook_male_1';
+function getDashscopeKey(): string {
+  // 复用 OPENAI_API_KEY（DashScope 兼容）
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY 未配置');
+  return apiKey;
 }
+
+// ==================== TTS 合成 ====================
 
 async function synthesizeAudio(
   text: string,
@@ -33,7 +41,6 @@ async function synthesizeAudio(
   const segments: string[] = [];
   let pos = 0;
 
-  // 拆分长文本
   while (pos < text.length) {
     let end = Math.min(pos + MAX_CHARS, text.length);
     if (end < text.length) {
@@ -91,7 +98,6 @@ async function synthesizeAudio(
 
     buffers.push(Buffer.from(audioHex, 'hex'));
 
-    // 分段间延迟
     if (i < segments.length - 1) {
       await new Promise(r => setTimeout(r, 5000));
     }
@@ -99,6 +105,188 @@ async function synthesizeAudio(
 
   return Buffer.concat(buffers);
 }
+
+// ==================== ASR 语音识别（DashScope Paraformer） ====================
+
+interface Subtitle {
+  text: string;
+  start: number;
+  end: number;
+}
+
+async function transcribeAudio(audioFilePath: string): Promise<Subtitle[]> {
+  const apiKey = getDashscopeKey();
+
+  try {
+    // Step 1: 上传音频文件获取 file URL（用 base64 直接传）
+    const audioBuffer = fs.readFileSync(audioFilePath);
+    const base64Audio = audioBuffer.toString('base64');
+
+    // Step 2: 调用 Paraformer 识别（必须异步模式）
+    const response = await fetch(`${DASHSCOPE_API_BASE}/services/audio/asr/transcription`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'X-DashScope-Async': 'enable',
+      },
+      body: JSON.stringify({
+        model: 'paraformer-v2',
+        input: {
+          file_urls: [`data:audio/mp3;base64,${base64Audio}`],
+        },
+        parameters: {
+          language_hints: ['zh'],
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('[ASR] 提交失败:', response.status, errText);
+      return [];
+    }
+
+    const submitResult = await response.json();
+    console.log('[ASR] 提交结果:', JSON.stringify(submitResult, null, 2));
+
+    // 可能是异步的，需要轮询
+    const taskId = submitResult.output?.task_id;
+    if (!taskId) {
+      // 同步返回了结果
+      return parseTranscriptionResult(submitResult);
+    }
+
+    // Step 3: 轮询等待结果
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+
+      const queryRes = await fetch(
+        `${DASHSCOPE_API_BASE}/tasks/${taskId}`,
+        {
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        }
+      );
+
+      if (!queryRes.ok) continue;
+
+      const queryResult = await queryRes.json();
+      const status = queryResult.output?.task_status;
+      console.log(`[ASR] 轮询 #${i + 1}: ${status}`);
+
+      if (status === 'SUCCEEDED') {
+        // 从 transcription_url 下载完整结果
+        const results = queryResult.output?.results as Record<string, unknown>[] | undefined;
+        if (results?.[0]) {
+          const transcriptionUrl = results[0].transcription_url as string | undefined;
+          if (transcriptionUrl) {
+            console.log('[ASR] 下载字幕数据...');
+            const trRes = await fetch(transcriptionUrl);
+            if (trRes.ok) {
+              const trData = await trRes.json();
+              return parseParaformerResult(trData);
+            }
+          }
+        }
+        return parseTranscriptionResult(queryResult);
+      }
+
+      if (status === 'FAILED') {
+        console.error('[ASR] 识别失败:', queryResult.output?.message);
+        return [];
+      }
+    }
+
+    console.error('[ASR] 识别超时');
+    return [];
+  } catch (err) {
+    console.error('[ASR] 错误:', err);
+    return [];
+  }
+}
+
+/** 解析 Paraformer transcription_url 下载的结果 */
+function parseParaformerResult(data: Record<string, unknown>): Subtitle[] {
+  const subtitles: Subtitle[] = [];
+  try {
+    const transcripts = data.transcripts as Record<string, unknown>[] | undefined;
+    if (!transcripts) return [];
+
+    for (const transcript of transcripts) {
+      const sentences = transcript.sentences as {
+        text: string;
+        begin_time: number;
+        end_time: number;
+      }[] | undefined;
+
+      if (sentences) {
+        for (const s of sentences) {
+          subtitles.push({
+            text: s.text || '',
+            start: (s.begin_time || 0) / 1000, // ms -> s
+            end: (s.end_time || 0) / 1000,
+          });
+        }
+      }
+    }
+
+    console.log(`[ASR] 解析到 ${subtitles.length} 条逐句字幕`);
+  } catch (err) {
+    console.error('[ASR] 解析 Paraformer 结果失败:', err);
+  }
+  return subtitles;
+}
+
+function parseTranscriptionResult(result: Record<string, unknown>): Subtitle[] {
+  const subtitles: Subtitle[] = [];
+
+  try {
+    const output = result.output as Record<string, unknown> | undefined;
+    if (!output) return [];
+
+    // 尝试从 results 中提取
+    const results = output.results as Record<string, unknown>[] | undefined;
+    if (results && results.length > 0) {
+      for (const r of results) {
+        const transcription = r.transcription as Record<string, unknown> | undefined;
+        if (!transcription) continue;
+
+        // Paraformer 返回的 sentences
+        const sentences = (transcription.sentences || transcription.paragraphs) as
+          { text: string; begin_time?: number; end_time?: number; start?: number; end?: number }[] | undefined;
+
+        if (sentences) {
+          for (const s of sentences) {
+            subtitles.push({
+              text: s.text || '',
+              start: ((s.begin_time || s.start || 0) as number) / 1000, // ms -> s
+              end: ((s.end_time || s.end || 0) as number) / 1000,
+            });
+          }
+        }
+      }
+    }
+
+    // 尝试从 transcription_url 下载完整结果
+    if (subtitles.length === 0 && results) {
+      for (const r of results) {
+        const url = r.transcription_url as string | undefined;
+        if (url) {
+          console.log('[ASR] 需要下载完整结果:', url);
+          // 这里可以异步下载，暂时跳过
+        }
+      }
+    }
+
+    console.log(`[ASR] 解析到 ${subtitles.length} 条字幕`);
+  } catch (err) {
+    console.error('[ASR] 解析结果失败:', err);
+  }
+
+  return subtitles;
+}
+
+// ==================== API 路由 ====================
 
 export async function POST(request: NextRequest) {
   try {
@@ -108,19 +296,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少文本内容' }, { status: 400 });
     }
 
-    const apiKey = getApiKey();
-    const voiceId = getActiveVoiceId();
+    const minimaxKey = getMinimaxKey();
 
     // 清洗文本
     const cleaned = cleanForTTS(text);
     console.log(`[TTS Episode] "${title || '未命名'}" ${cleaned.length} 字`);
 
-    // 合成
+    // 1. 合成音频（同步，快速）
     const audioBuffer = await synthesizeAudio(cleaned, {
-      voiceId,
+      voiceId: 'audiobook_male_1',
       model: 'speech-2.8-hd',
       speed,
-      apiKey,
+      apiKey: minimaxKey,
     });
 
     // 保存文件
@@ -135,16 +322,24 @@ export async function POST(request: NextRequest) {
     const filePath = path.join(outputDir, fileName);
 
     fs.writeFileSync(filePath, audioBuffer);
-
     const audioPath = `out/audio/${fileName}`;
-    console.log(`[TTS Episode] 完成: ${audioPath} (${audioBuffer.length} bytes)`);
+    console.log(`[TTS Episode] 音频完成: ${audioPath} (${audioBuffer.length} bytes)`);
 
-    // 保存 TTS 结果到 session
+    // 2. ASR 识别获取字幕时间戳
+    let subtitles: Subtitle[] = [];
+    try {
+      subtitles = await transcribeAudio(filePath);
+      console.log(`[TTS Episode] 字幕: ${subtitles.length} 条`);
+    } catch (err) {
+      console.error('[TTS Episode] ASR 失败，跳过字幕:', err);
+    }
+
+    // 3. 保存到 session
     if (sessionId && episodeKey) {
       const session = getSession(sessionId);
       if (session) {
         if (!session.ttsResults) session.ttsResults = {};
-        session.ttsResults[episodeKey] = audioPath;
+        session.ttsResults[episodeKey] = JSON.stringify({ audioPath, subtitles });
         updateSession(session);
       }
     }
@@ -152,6 +347,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       audioPath,
+      subtitles,
       audioSize: audioBuffer.length,
       charCount: cleaned.length,
     });

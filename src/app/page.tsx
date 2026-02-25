@@ -151,6 +151,8 @@ function SpeakerIcon({ className }: { className?: string }) {
 
 // ==================== 预览分段组件 ====================
 
+interface Subtitle { text: string; start: number; end: number; }
+interface TtsData { status: TtsStatus; path?: string; subtitles?: Subtitle[]; error?: string; }
 type TtsStatus = 'idle' | 'loading' | 'done' | 'playing' | 'error';
 
 function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
@@ -160,26 +162,32 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
   initialTts?: Record<string, string>;
 }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
-  // 从 session 恢复已生成的 TTS 状态
-  const [ttsMap, setTtsMap] = useState<Record<number, { status: TtsStatus; path?: string; error?: string }>>(() => {
+
+  const [ttsMap, setTtsMap] = useState<Record<number, TtsData>>(() => {
     if (!initialTts) return {};
-    const restored: Record<number, { status: TtsStatus; path?: string }> = {};
-    for (const [key, audioPath] of Object.entries(initialTts)) {
-      // key 格式: "chapterIdx:sectionIdx"
+    const restored: Record<number, TtsData> = {};
+    for (const [key, value] of Object.entries(initialTts)) {
       const parts = key.split(':');
       if (parts.length === 2 && parseInt(parts[0]) === chapterIdx) {
-        const sectionIdx = parseInt(parts[1]);
-        restored[sectionIdx] = { status: 'done', path: audioPath };
+        const si = parseInt(parts[1]);
+        try {
+          const p = JSON.parse(value);
+          restored[si] = { status: 'done', path: p.audioPath, subtitles: p.subtitles };
+        } catch {
+          restored[si] = { status: 'done', path: value };
+        }
       }
     }
     return restored;
   });
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingIdx, setPlayingIdx] = useState<number | null>(null);
+  const [activeSubIdx, setActiveSubIdx] = useState(-1);
+  const subtitleRefs = useRef<Record<number, HTMLSpanElement | null>>({});
 
   const handleTts = useCallback(async (idx: number, title: string, body: string) => {
     setTtsMap((prev) => ({ ...prev, [idx]: { status: 'loading' } }));
-
     try {
       const episodeKey = `${chapterIdx}:${idx}`;
       const res = await fetch('/api/tts/episode', {
@@ -187,11 +195,12 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: body, title, speed: 1.3, sessionId, episodeKey }),
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-
-      setTtsMap((prev) => ({ ...prev, [idx]: { status: 'done', path: data.audioPath } }));
+      setTtsMap((prev) => ({
+        ...prev,
+        [idx]: { status: 'done', path: data.audioPath, subtitles: data.subtitles || [] },
+      }));
     } catch (err) {
       setTtsMap((prev) => ({
         ...prev,
@@ -201,24 +210,33 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
   }, [sessionId, chapterIdx]);
 
   const handlePlay = useCallback((idx: number, audioPath: string) => {
-    // 停止当前播放
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if (playingIdx === idx) { setPlayingIdx(null); setActiveSubIdx(-1); return; }
 
-    if (playingIdx === idx) {
-      setPlayingIdx(null);
-      return;
-    }
-
+    setOpenIdx(idx);
     const audio = new Audio(`/api/read/output?path=${encodeURIComponent(audioPath)}&raw=1`);
-    audio.onended = () => setPlayingIdx(null);
-    audio.onerror = () => setPlayingIdx(null);
+    const subs = ttsMap[idx]?.subtitles || [];
+
+    if (subs.length > 0) {
+      audio.ontimeupdate = () => {
+        const t = audio.currentTime;
+        let found = -1;
+        for (let i = 0; i < subs.length; i++) {
+          if (t >= subs[i].start && t < subs[i].end) { found = i; break; }
+        }
+        setActiveSubIdx(found);
+        if (found >= 0 && subtitleRefs.current[found]) {
+          subtitleRefs.current[found]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      };
+    }
+
+    audio.onended = () => { setPlayingIdx(null); setActiveSubIdx(-1); };
+    audio.onerror = () => { setPlayingIdx(null); setActiveSubIdx(-1); };
     audio.play();
     audioRef.current = audio;
     setPlayingIdx(idx);
-  }, [playingIdx]);
+  }, [playingIdx, ttsMap]);
 
   if (!content || content === '未找到该章节内容' || content === '加载失败') {
     return <div className={styles.previewLoading}>{content}</div>;
@@ -310,7 +328,21 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
               </div>
             </div>
             {isOpen && (
-              <pre className={styles.sectionBody}>{sec.body}</pre>
+              playingIdx === i && tts?.subtitles && tts.subtitles.length > 0 ? (
+                <div className={styles.subtitlePanel}>
+                  {tts.subtitles.map((sub, si) => (
+                    <span
+                      key={si}
+                      ref={(el) => { subtitleRefs.current[si] = el; }}
+                      className={`${styles.subtitleLine} ${activeSubIdx === si ? styles.subtitleActive : ''}`}
+                    >
+                      {sub.text}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <pre className={styles.sectionBody}>{sec.body}</pre>
+              )
             )}
           </div>
         );
@@ -337,6 +369,16 @@ export default function Home() {
   const [previewContent, setPreviewContent] = useState<string>('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sessionTts, setSessionTts] = useState<Record<string, string>>({});
+
+  // 实时生成内容（正在生成的章节累积内容）
+  const [liveContents, setLiveContents] = useState<Record<number, string>>({});
+
+  // 当 liveContents 更新时，自动同步到预览面板（如果正在预览 active 章节）
+  useEffect(() => {
+    if (previewIndex !== null && chapters[previewIndex]?.status === 'active' && liveContents[previewIndex] !== undefined) {
+      setPreviewContent(liveContents[previewIndex]);
+    }
+  }, [liveContents, previewIndex, chapters]);
 
   // 实时日志
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -478,6 +520,11 @@ export default function Home() {
 
         setCurrentIndex(i);
 
+        // 清空该章的实时内容，自动打开预览
+        setLiveContents((prev) => ({ ...prev, [i]: '' }));
+        setPreviewIndex(i);
+        setPreviewContent('');
+
         setChapters((prev) =>
           prev.map((ch, idx) => (idx === i ? { ...ch, status: 'active' as const } : ch))
         );
@@ -508,6 +555,14 @@ export default function Home() {
                     : ch
                 )
               );
+
+              // 累积实时内容
+              if (event.segmentContent) {
+                setLiveContents((prev) => ({
+                  ...prev,
+                  [i]: (prev[i] || '') + (prev[i] ? '\n\n' : '') + (event.segmentContent as string),
+                }));
+              }
             }
 
             if (type === 'chapter_done') {
@@ -640,6 +695,16 @@ export default function Home() {
     }
 
     if (!session) return;
+    const ch = chapters[chapterIdx];
+
+    // 正在生成的章节：直接用 liveContents（不需要从文件加载）
+    if (ch?.status === 'active') {
+      setPreviewIndex(chapterIdx);
+      setPreviewContent(liveContents[chapterIdx] || '');
+      setPreviewLoading(false);
+      return;
+    }
+
     setPreviewIndex(chapterIdx);
     setPreviewLoading(true);
     setPreviewContent('');
@@ -653,7 +718,6 @@ export default function Home() {
       }
 
       // 按 ## 章节标题 切分，找到对应章节
-      const ch = chapters[chapterIdx];
       const chapterTitle = ch?.title || '';
       const escaped = chapterTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       // 不用 \b，中文字符不支持词边界
@@ -677,7 +741,7 @@ export default function Home() {
     } finally {
       setPreviewLoading(false);
     }
-  }, [previewIndex, session, chapters]);
+  }, [previewIndex, session, chapters, liveContents]);
 
   // ==================== 统计 ====================
 
@@ -895,8 +959,8 @@ export default function Home() {
                     <div
                       key={idx}
                       className={`${styles.chapterItem} ${isActive ? styles.chapterActive : ''} ${isSelected ? styles.chapterSelected : ''}`}
-                      onClick={() => isDone && handlePreview(idx)}
-                      style={{ cursor: isDone ? 'pointer' : 'default' }}
+                      onClick={() => (isDone || isActive) && handlePreview(idx)}
+                      style={{ cursor: (isDone || isActive) ? 'pointer' : 'default' }}
                     >
                       <div className={dotClass}>
                         {isDone && <CheckIcon className={styles.chapterCheck} />}
@@ -940,19 +1004,31 @@ export default function Home() {
               {previewIndex !== null ? (
                 <div className={styles.readerPanel}>
                   <div className={styles.readerHeader}>
-                    <span className={styles.readerTitle}>{chapters[previewIndex]?.title}</span>
+                    <span className={styles.readerTitle}>
+                      {chapters[previewIndex]?.title}
+                      {chapters[previewIndex]?.status === 'active' && (
+                        <span className={styles.liveTag}>生成中</span>
+                      )}
+                    </span>
                     <button className={styles.previewBtn} onClick={() => setPreviewIndex(null)}>关闭</button>
                   </div>
                   <div className={styles.readerBody}>
                     {previewLoading ? (
                       <div className={styles.previewLoading}>加载中...</div>
-                    ) : (
+                    ) : previewContent ? (
                       <PreviewSections
                         content={previewContent}
                         sessionId={session?.sessionId}
                         chapterIdx={previewIndex}
                         initialTts={sessionTts}
                       />
+                    ) : chapters[previewIndex]?.status === 'active' ? (
+                      <div className={styles.previewLoading}>
+                        <div className={styles.spinner} />
+                        等待第一回生成...
+                      </div>
+                    ) : (
+                      <div className={styles.previewLoading}>暂无内容</div>
                     )}
                   </div>
                 </div>

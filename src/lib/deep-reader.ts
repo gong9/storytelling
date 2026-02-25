@@ -14,6 +14,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { createDeepAgent } from 'deepagents';
 import { RLMReader } from './rlm-reader';
 import { TASK_SUMMARY } from './prompts/rlm';
+import { splitIntoParagraphs } from './text-splitter';
 import {
   createGetChapterInfoTool,
   createReadSegmentTool,
@@ -181,6 +182,10 @@ export type ChapterProgressCallback = (event: {
   totalSegments?: number;
   charCount?: number;
   outputChars?: number;
+  /** segment_done 时携带生成的内容 */
+  segmentContent?: string;
+  /** segment_done 时携带场景标题 */
+  segmentTitle?: string;
 }) => void;
 
 /** 初始化进度回调 */
@@ -193,55 +198,6 @@ export type InitProgressCallback = (event: {
   chunksRead?: number;
   totalChunks?: number;
 }) => void;
-
-// ==================== 静态章节切分 ====================
-
-/** 按章节标记或固定长度切分文本（静态方法，供 init API 使用） */
-export function splitChapters(content: string, chapterSize: number = 5000): Chapter[] {
-  const chapterPattern = /第[一二三四五六七八九十百千\d]+[章回节篇]/g;
-  const matches = [...content.matchAll(chapterPattern)];
-
-  if (matches.length >= 3) {
-    const chapters: Chapter[] = [];
-    for (let i = 0; i < matches.length; i++) {
-      const match = matches[i];
-      const startPos = match.index!;
-      const endPos = i < matches.length - 1 ? matches[i + 1].index! : content.length;
-      chapters.push({
-        index: i + 1,
-        title: match[0],
-        content: content.slice(startPos, endPos).trim(),
-        charStart: startPos,
-        charEnd: endPos,
-      });
-    }
-    return chapters;
-  }
-
-  // 按固定长度切分
-  const chapters: Chapter[] = [];
-  let pos = 0;
-  let index = 1;
-  while (pos < content.length) {
-    let endPos = Math.min(pos + chapterSize, content.length);
-    if (endPos < content.length) {
-      const nextParagraph = content.indexOf('\n\n', endPos - 500);
-      if (nextParagraph > 0 && nextParagraph < endPos + 500) {
-        endPos = nextParagraph;
-      }
-    }
-    chapters.push({
-      index,
-      title: `第${index}节`,
-      content: content.slice(pos, endPos).trim(),
-      charStart: pos,
-      charEnd: endPos,
-    });
-    pos = endPos;
-    index++;
-  }
-  return chapters;
-}
 
 // ==================== DeepReader 类 ====================
 
@@ -284,63 +240,6 @@ export class DeepReader {
       frequencyPenalty: 0.3,
       presencePenalty: 0.3,
     });
-  }
-
-  // ==================== 章节切分 ====================
-
-  private splitIntoChapters(content: string): Chapter[] {
-    const chapterPattern = /第[一二三四五六七八九十百千\d]+[章回节篇]/g;
-    const matches = [...content.matchAll(chapterPattern)];
-
-    if (matches.length >= 3) {
-      console.log(`[DeepReader] 识别到 ${matches.length} 个章节标记`);
-      return this.splitByMarkers(content, matches);
-    }
-
-    console.log(`[DeepReader] 未识别到章节标记，按 ${this.config.chapterSize} 字切分`);
-    return this.splitByLength(content, this.config.chapterSize);
-  }
-
-  private splitByMarkers(content: string, matches: RegExpMatchArray[]): Chapter[] {
-    const chapters: Chapter[] = [];
-    for (let i = 0; i < matches.length; i++) {
-      const match = matches[i];
-      const startPos = match.index!;
-      const endPos = i < matches.length - 1 ? matches[i + 1].index! : content.length;
-      chapters.push({
-        index: i + 1,
-        title: match[0],
-        content: content.slice(startPos, endPos).trim(),
-        charStart: startPos,
-        charEnd: endPos,
-      });
-    }
-    return chapters;
-  }
-
-  private splitByLength(content: string, chunkSize: number): Chapter[] {
-    const chapters: Chapter[] = [];
-    let pos = 0;
-    let index = 1;
-    while (pos < content.length) {
-      let endPos = Math.min(pos + chunkSize, content.length);
-      if (endPos < content.length) {
-        const nextParagraph = content.indexOf('\n\n', endPos - 500);
-        if (nextParagraph > 0 && nextParagraph < endPos + 500) {
-          endPos = nextParagraph;
-        }
-      }
-      chapters.push({
-        index,
-        title: `第${index}节`,
-        content: content.slice(pos, endPos).trim(),
-        charStart: pos,
-        charEnd: endPos,
-      });
-      pos = endPos;
-      index++;
-    }
-    return chapters;
   }
 
   // ==================== 片段切分 ====================
@@ -392,19 +291,22 @@ export class DeepReader {
     return segments;
   }
 
-  // ==================== 全局上下文 ====================
+  // ==================== 全局上下文 + 智能章节划分 ====================
 
-  private async generateGlobalContext(content: string, title: string): Promise<string> {
+  private async generateContextAndChapters(
+    content: string,
+    title: string
+  ): Promise<{ context: string; chapters: Chapter[] }> {
     if (!this.config.enablePreview) {
-      return '';
+      return { context: '', chapters: [] };
     }
 
-    console.log('[DeepReader] 生成全局上下文（速读预览）...');
+    console.log('[DeepReader] 生成全局上下文 + 智能章节划分...');
 
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
-        purpose: '快速提取文档的核心背景信息，包括：主要人物及其关系、时代背景、情节主线。',
+        purpose: '全面阅读文档后，完成两项任务：1）提取核心背景信息；2）根据内容语义智能划分章节。',
         outputFormat: `
 ## 时代背景
 （简述故事发生的时代、地点）
@@ -414,16 +316,126 @@ export class DeepReader {
 
 ## 情节主线
 （简述故事主线，3-5 句话）
+
+## 章节划分
+请根据内容语义将全文划分为若干章节。要求：
+- 每章 10000-20000 字为宜（不要太短也不要太长）
+- 跳过目录、版权页、序言、附录等非正文内容
+- 按故事情节的自然段落来划分，不必完全遵循原书章节
+- 给每章起一个有吸引力的标题
+
+用以下 JSON 格式输出（必须是合法 JSON 数组）：
+\`\`\`json
+[
+  {"title": "章节标题", "startChunk": 1, "endChunk": 10, "summary": "一句话概要"},
+  {"title": "章节标题", "startChunk": 11, "endChunk": 25, "summary": "一句话概要"}
+]
+\`\`\`
+
+注意：startChunk 和 endChunk 是你阅读过的块编号（从 1 开始）。确保所有正文块都被覆盖，不要遗漏。
 `,
       },
       model: this.config.model,
       baseURL: this.config.baseURL,
-      enableCheckpoint: false, // 速读预览每次完整执行，不需要记录历史
+      enableCheckpoint: false,
     });
 
     const result = await reader.read({ content, title });
-    console.log(`[DeepReader] 全局上下文生成完成（${result.content.length} 字）`);
-    return result.content;
+    const output = result.content || '';
+
+    // 分离全局上下文和章节划分
+    const chapterSectionIdx = output.indexOf('## 章节划分');
+    let contextText = output;
+    let chaptersJson = '';
+
+    if (chapterSectionIdx > -1) {
+      contextText = output.slice(0, chapterSectionIdx).trim();
+      chaptersJson = output.slice(chapterSectionIdx);
+    }
+
+    console.log(`[DeepReader] 全局上下文: ${contextText.length} 字`);
+
+    // 解析章节 JSON
+    const chapters = this.parseChapterPlan(chaptersJson, content);
+    console.log(`[DeepReader] 智能章节划分: ${chapters.length} 章`);
+
+    return { context: contextText, chapters };
+  }
+
+  /**
+   * 从 RLM 输出中解析章节划分 JSON，映射回原文内容
+   */
+  private parseChapterPlan(
+    rawOutput: string,
+    fullContent: string,
+  ): Chapter[] {
+    try {
+      // 提取 JSON（可能被 ```json ``` 包裹）
+      let jsonStr = rawOutput;
+      const jsonMatch = rawOutput.match(/```json\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1].trim();
+      } else {
+        // 尝试找 [ ... ] 数组
+        const arrayMatch = rawOutput.match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          jsonStr = arrayMatch[0];
+        } else {
+          console.warn('[DeepReader] 未找到章节 JSON');
+          return [];
+        }
+      }
+
+      const plan = JSON.parse(jsonStr) as {
+        title: string;
+        startChunk: number;
+        endChunk: number;
+        summary?: string;
+      }[];
+
+      if (!Array.isArray(plan) || plan.length === 0) {
+        console.warn('[DeepReader] 章节划分为空数组');
+        return [];
+      }
+
+      // 用和 RLMReader 相同的切分方式重建 chunks
+      const chunks: string[] = splitIntoParagraphs(fullContent, 2000);
+
+      const chapters: Chapter[] = [];
+      for (let i = 0; i < plan.length; i++) {
+        const p = plan[i];
+        const start = Math.max(1, p.startChunk);
+        const end = Math.min(chunks.length, p.endChunk);
+
+        // 拼接块内容
+        const chapterContent = chunks.slice(start - 1, end).join('\n\n');
+
+        if (chapterContent.length < 50) {
+          console.warn(`[DeepReader] 章节 "${p.title}" 内容过短(${chapterContent.length}字)，跳过`);
+          continue;
+        }
+
+        // 计算 charStart/charEnd
+        let charStart = 0;
+        for (let j = 0; j < start - 1; j++) {
+          charStart += chunks[j].length + 2; // +2 for \n\n
+        }
+        const charEnd = charStart + chapterContent.length;
+
+        chapters.push({
+          index: chapters.length + 1,
+          title: p.title || `第${chapters.length + 1}章`,
+          content: chapterContent,
+          charStart,
+          charEnd,
+        });
+      }
+
+      return chapters;
+    } catch (err) {
+      console.error('[DeepReader] 解析章节划分失败:', err);
+      return [];
+    }
   }
 
   // ==================== 工具处理函数 ====================
@@ -520,6 +532,7 @@ ${input.writingHints}
       segmentId: input.segmentId,
       content: `已生成 ${generatedContent.length} 字评书内容`,
       charCount: generatedContent.length,
+      generatedText: generatedContent,
     };
   }
 
@@ -583,7 +596,16 @@ ${input.writingHints}
         console.log(`  [工具 #${this.toolCallCount}] spawn_writer(${input.segmentId}, "${input.sceneTitle}")`);
         onProgress?.({ type: 'segment_start', segmentId: input.segmentId, totalSegments: this.segments.length });
         const result = await this.handleSpawnWriter(input);
-        onProgress?.({ type: 'segment_done', segmentId: input.segmentId, totalSegments: this.segments.length, charCount: result.charCount });
+        // 通过 SSE 把生成的内容实时推送到前端
+        const sectionOutput = `### ${input.sceneTitle}\n\n${result.generatedText}`;
+        onProgress?.({
+          type: 'segment_done',
+          segmentId: input.segmentId,
+          totalSegments: this.segments.length,
+          charCount: result.charCount,
+          segmentContent: sectionOutput,
+          segmentTitle: input.sceneTitle,
+        });
         return result;
       }),
       // append_output 已移除，spawn_writer 直接写入输出
@@ -639,14 +661,15 @@ ${input.writingHints}
 
     console.log(`[DeepReader] initSession: ${title} (${content.length.toLocaleString()} 字)`);
 
-    // 章节切分
-    this.chapters = splitChapters(content, this.config.chapterSize);
-    console.log(`[DeepReader] 识别到 ${this.chapters.length} 个章节`);
+    // RLM 速读：一次性生成全局上下文 + 智能章节划分
+    const { context, chapters } = await this.generateContextAndChapters(content, title);
+    this.globalContext = context;
+    this.chapters = chapters;
 
-    // 全局上下文（速读预览）
-    if (this.config.enablePreview) {
-      this.globalContext = await this.generateGlobalContext(content, title);
+    if (this.chapters.length === 0) {
+      throw new Error('RLM 章节划分失败：未能识别出任何章节，请检查文档内容');
     }
+    console.log(`[DeepReader] RLM 智能章节划分: ${this.chapters.length} 章`);
 
     // 准备输出路径
     const outputDir = path.join(process.cwd(), 'out', 'deep');
@@ -738,14 +761,15 @@ ${input.writingHints}
     console.log(`任务: ${this.config.task.purpose}`);
     console.log(`模型: ${this.config.model}`);
 
-    // 1. 章节切分
-    this.chapters = splitChapters(input.content, this.config.chapterSize);
-    console.log(`章节数: ${this.chapters.length}`);
+    // 1. RLM 速读 + 智能章节划分
+    const { context, chapters } = await this.generateContextAndChapters(input.content, input.title || '');
+    this.globalContext = context;
+    this.chapters = chapters;
 
-    // 2. 生成全局上下文
-    if (this.config.enablePreview) {
-      this.globalContext = await this.generateGlobalContext(input.content, input.title || '');
+    if (this.chapters.length === 0) {
+      throw new Error('RLM 章节划分失败');
     }
+    console.log(`章节数: ${this.chapters.length}`);
 
     // 3. 准备输出文件
     const outputDir = path.join(process.cwd(), 'out', 'deep');
