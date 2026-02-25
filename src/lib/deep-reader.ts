@@ -7,6 +7,7 @@
  * - 每次只处理 2000-3000 字，避免长文本退化
  */
 
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { ChatOpenAI } from '@langchain/openai';
@@ -151,6 +152,94 @@ export function loadDeepReadTask(taskName: string): DeepReadTaskConfig {
 
 /** 预设任务：评书改编 */
 export const DEEP_TASK_PINGSHU = loadDeepReadTask('pingshu');
+
+// ==================== 会话类型 ====================
+
+/** DeepReader 会话数据（用于 init/chapter 分步 API） */
+export interface DeepReaderSession {
+  id: string;
+  title: string;
+  content: string;
+  chapters: Chapter[];
+  globalContext: string;
+  chapterSummaries: string[];
+  outputPath: string;
+  ttsOutputPath: string;
+  outputDir: string;
+  baseName: string;
+  timestamp: string;
+  completedChapters: number[];
+  createdAt: number;
+}
+
+/** 章节处理进度回调 */
+export type ChapterProgressCallback = (event: {
+  type: 'segment_start' | 'segment_done' | 'chapter_done';
+  segmentId?: number;
+  totalSegments?: number;
+  charCount?: number;
+  outputChars?: number;
+}) => void;
+
+/** 初始化进度回调 */
+export type InitProgressCallback = (event: {
+  type: 'parsed' | 'chapters' | 'context_progress' | 'ready';
+  message?: string;
+  title?: string;
+  totalChars?: number;
+  chapterCount?: number;
+  chunksRead?: number;
+  totalChunks?: number;
+}) => void;
+
+// ==================== 静态章节切分 ====================
+
+/** 按章节标记或固定长度切分文本（静态方法，供 init API 使用） */
+export function splitChapters(content: string, chapterSize: number = 5000): Chapter[] {
+  const chapterPattern = /第[一二三四五六七八九十百千\d]+[章回节篇]/g;
+  const matches = [...content.matchAll(chapterPattern)];
+
+  if (matches.length >= 3) {
+    const chapters: Chapter[] = [];
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      const startPos = match.index!;
+      const endPos = i < matches.length - 1 ? matches[i + 1].index! : content.length;
+      chapters.push({
+        index: i + 1,
+        title: match[0],
+        content: content.slice(startPos, endPos).trim(),
+        charStart: startPos,
+        charEnd: endPos,
+      });
+    }
+    return chapters;
+  }
+
+  // 按固定长度切分
+  const chapters: Chapter[] = [];
+  let pos = 0;
+  let index = 1;
+  while (pos < content.length) {
+    let endPos = Math.min(pos + chapterSize, content.length);
+    if (endPos < content.length) {
+      const nextParagraph = content.indexOf('\n\n', endPos - 500);
+      if (nextParagraph > 0 && nextParagraph < endPos + 500) {
+        endPos = nextParagraph;
+      }
+    }
+    chapters.push({
+      index,
+      title: `第${index}节`,
+      content: content.slice(pos, endPos).trim(),
+      charStart: pos,
+      charEnd: endPos,
+    });
+    pos = endPos;
+    index++;
+  }
+  return chapters;
+}
 
 // ==================== DeepReader 类 ====================
 
@@ -457,7 +546,7 @@ ${input.writingHints}
 
   // ==================== 章节处理（Agent 模式） ====================
 
-  private async processChapterWithAgent(chapter: Chapter): Promise<string> {
+  private async processChapterWithAgent(chapter: Chapter, onProgress?: ChapterProgressCallback): Promise<string> {
     // 初始化状态
     this.currentChapter = chapter;
     this.segments = this.splitChapterIntoSegments(chapter);
@@ -490,7 +579,10 @@ ${input.writingHints}
       createSpawnWriterTool(async (input) => {
         this.toolCallCount++;
         console.log(`  [工具 #${this.toolCallCount}] spawn_writer(${input.segmentId}, "${input.sceneTitle}")`);
-        return this.handleSpawnWriter(input);
+        onProgress?.({ type: 'segment_start', segmentId: input.segmentId, totalSegments: this.segments.length });
+        const result = await this.handleSpawnWriter(input);
+        onProgress?.({ type: 'segment_done', segmentId: input.segmentId, totalSegments: this.segments.length, charCount: result.charCount });
+        return result;
       }),
       // append_output 已移除，spawn_writer 直接写入输出
       createDeepReaderDoneTool(() => {
@@ -533,6 +625,106 @@ ${input.writingHints}
     return this.output;
   }
 
+  // ==================== 分步 API 支持 ====================
+
+  /**
+   * 初始化会话：解析文档、切分章节、生成全局上下文
+   * 供 /api/read/init 使用
+   */
+  async initSession(input: DocumentInput): Promise<DeepReaderSession> {
+    const content = input.content;
+    const title = input.title || '未命名';
+
+    console.log(`[DeepReader] initSession: ${title} (${content.length.toLocaleString()} 字)`);
+
+    // 章节切分
+    this.chapters = splitChapters(content, this.config.chapterSize);
+    console.log(`[DeepReader] 识别到 ${this.chapters.length} 个章节`);
+
+    // 全局上下文（速读预览）
+    if (this.config.enablePreview) {
+      this.globalContext = await this.generateGlobalContext(content, title);
+    }
+
+    // 准备输出路径
+    const outputDir = path.join(process.cwd(), 'out', 'deep');
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const baseName = title.replace(/\.[^.]+$/, '');
+    const outputFileName = `${baseName}_deep_${timestamp}.md`;
+    const ttsFileName = `${baseName}_deep_${timestamp}_tts.txt`;
+
+    // 写入文件头
+    const outputPath = path.join(outputDir, outputFileName);
+    const header = `# ${title}\n\n> 生成时间: ${new Date().toLocaleString('zh-CN')}\n> 原文字数: ${content.length.toLocaleString()}\n> 章节数: ${this.chapters.length}\n> 模式: Agent (分片段处理)\n\n---\n\n`;
+    fs.writeFileSync(outputPath, header, 'utf-8');
+
+    const sessionId = crypto.randomUUID();
+
+    return {
+      id: sessionId,
+      title,
+      content,
+      chapters: this.chapters,
+      globalContext: this.globalContext,
+      chapterSummaries: [],
+      outputPath: `out/deep/${outputFileName}`,
+      ttsOutputPath: `out/deep/${ttsFileName}`,
+      outputDir,
+      baseName,
+      timestamp,
+      completedChapters: [],
+      createdAt: Date.now(),
+    };
+  }
+
+  /**
+   * 处理单章：供 /api/read/chapter 使用
+   * 接收会话数据和章节索引，返回章节输出文本
+   */
+  async processOneChapter(
+    session: DeepReaderSession,
+    chapterIndex: number,
+    onProgress?: ChapterProgressCallback,
+  ): Promise<{ output: string; charCount: number }> {
+    const chapter = session.chapters[chapterIndex];
+    if (!chapter) {
+      throw new Error(`章节索引 ${chapterIndex} 不存在`);
+    }
+
+    // 恢复状态
+    this.globalContext = session.globalContext;
+    this.chapterSummaries = session.chapterSummaries;
+
+    console.log(`[章节 ${chapterIndex + 1}/${session.chapters.length}] ${chapter.title}（${chapter.content.length} 字）`);
+
+    // 处理章节
+    const chapterOutput = await this.processChapterWithAgent(chapter, onProgress);
+
+    // 追加到输出文件
+    const fullOutputPath = path.join(process.cwd(), session.outputPath);
+    fs.appendFileSync(fullOutputPath, `## ${chapter.title}\n\n${chapterOutput}\n\n---\n\n`, 'utf-8');
+
+    // 记录完成
+    session.completedChapters.push(chapterIndex);
+    session.chapterSummaries.push(chapterOutput.slice(0, 200));
+
+    // 如果是最后一章，生成 TTS 版本
+    if (session.completedChapters.length === session.chapters.length) {
+      const fullOutput = fs.readFileSync(fullOutputPath, 'utf-8');
+      const ttsContent = cleanForTTS(fullOutput);
+      const ttsFullPath = path.join(process.cwd(), session.ttsOutputPath);
+      fs.writeFileSync(ttsFullPath, ttsContent, 'utf-8');
+      console.log(`[DeepReader] TTS 清洗版已生成: ${session.ttsOutputPath}`);
+    }
+
+    onProgress?.({ type: 'chapter_done', outputChars: chapterOutput.length });
+
+    return { output: chapterOutput, charCount: chapterOutput.length };
+  }
+
   // ==================== 主入口 ====================
 
   async read(input: DocumentInput): Promise<DeepReaderOutput> {
@@ -545,7 +737,7 @@ ${input.writingHints}
     console.log(`模型: ${this.config.model}`);
 
     // 1. 章节切分
-    this.chapters = this.splitIntoChapters(input.content);
+    this.chapters = splitChapters(input.content, this.config.chapterSize);
     console.log(`章节数: ${this.chapters.length}`);
 
     // 2. 生成全局上下文

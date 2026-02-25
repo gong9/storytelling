@@ -2,7 +2,7 @@
  * RLM 工具：派出阅读助手
  */
 
-import { tool } from 'langchain';
+import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 
 /**

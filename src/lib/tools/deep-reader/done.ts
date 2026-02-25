@@ -2,7 +2,7 @@
  * DeepReader 工具：完成标记
  */
 
-import { tool } from 'langchain';
+import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 
 export interface DoneCheckResult {

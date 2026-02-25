@@ -2,7 +2,7 @@
  * DeepReader 工具：派出写作助手
  */
 
-import { tool } from 'langchain';
+import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 
 export interface SpawnWriterInput {

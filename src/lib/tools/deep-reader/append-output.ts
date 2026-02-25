@@ -2,7 +2,7 @@
  * DeepReader 工具：追加输出
  */
 
-import { tool } from 'langchain';
+import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 
 /**

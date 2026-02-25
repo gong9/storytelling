@@ -9,19 +9,20 @@
     "start": "next start -p 3100"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.15",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.0",
+    "@langchain/openai": "^1.2.2",
+    "deepagents": "^1.5.0",
     "next": "14.2.25",
+    "pdf-parse": "^1.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "deepagents": "^1.5.0",
-    "@langchain/core": "^1.1.15",
-    "@langchain/openai": "^1.2.2",
-    "@langchain/langgraph-checkpoint-sqlite": "^1.0.0",
-    "pdf-parse": "^1.1.1"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "typescript": "^5.3.0",
     "@types/node": "^20.10.0",
     "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0"
+    "@types/react-dom": "^18.2.0",
+    "typescript": "^5.3.0"
   }
 }

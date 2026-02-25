@@ -69,7 +69,7 @@ async function getCheckpointer(): Promise<SqliteSaver> {
       await instance.setup();
       globalCheckpointer = instance;
       console.log(`[RLM] Checkpointer 已初始化: ${CHECKPOINT_DB_PATH}`);
-      return globalCheckpointer;
+      return globalCheckpointer!;
     })();
   }
   

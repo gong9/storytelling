@@ -2,7 +2,7 @@
  * RLM 工具：读取块内容
  */
 
-import { tool } from 'langchain';
+import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 
 /**
