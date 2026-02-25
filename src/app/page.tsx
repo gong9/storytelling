@@ -539,22 +539,21 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
                   strokeWidth={strokeWidth}
                   style={{ transition: 'r 0.15s, stroke 0.15s, stroke-width 0.15s' }}
                 />
-                {/* 节点标签 - 仅悬浮时显示，避免文字重叠 */}
-                {isActive && (
-                  <text
-                    x={pos.x + 16}
-                    y={pos.y + 4}
-                    className={styles.graphNodeLabel}
-                    style={{
-                      pointerEvents: 'none',
-                      fontWeight: 600,
-                      fontSize: 11,
-                      fill: '#171717',
-                    }}
-                  >
-                    {char.name}
-                  </text>
-                )}
+                {/* 节点标签 - 始终显示 */}
+                <text
+                  x={pos.x + 14}
+                  y={pos.y + 4}
+                  className={styles.graphNodeLabel}
+                  style={{
+                    pointerEvents: 'none',
+                    fontWeight: isActive ? 600 : 500,
+                    fontSize: 11,
+                    fill: isActive ? '#171717' : '#525252',
+                    transition: 'fill 0.15s',
+                  }}
+                >
+                  {char.name.length > 4 ? char.name.slice(0, 4) + '…' : char.name}
+                </text>
               </g>
             );
           })}
