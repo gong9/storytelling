@@ -725,6 +725,32 @@ export class RLMReader {
         invokeConfig
       );
 
+      // 如果 agent 结束时没有调用 update_output，强制提醒它
+      if (!this.output || this.output.length < 100) {
+        console.log('');
+        console.log('[RLM] ⚠️ Agent 未生成输出，发送提醒...');
+        
+        const reminderMessage = `你已经阅读完全部内容，但忘记保存输出了！
+
+请立即执行：
+1. 根据阅读内容，生成章节划分 JSON
+2. 调用 update_output(章节划分JSON) 保存
+3. 调用 done() 完成任务
+
+章节划分 JSON 格式：
+\`\`\`json
+[
+  {"title": "章节标题", "startChunk": 1, "endChunk": 20, "summary": "一句话概要"},
+  ...
+]
+\`\`\``;
+
+        await agent.invoke(
+          { messages: [{ role: 'user', content: reminderMessage }] },
+          invokeConfig
+        );
+      }
+
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       const rawGraph = this.getCollectedGraph();
       console.log('');

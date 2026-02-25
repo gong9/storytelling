@@ -670,11 +670,12 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 10px 16px;
-  background: #1a1a1a;
-  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  background: #fafafa;
+  border-top: 1px solid #e5e5e5;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
   font-size: 11px;
-  line-height: 1.5;
-  color: #888;
+  line-height: 1.6;
+  color: #525252;
 }
 
 .logPanel::-webkit-scrollbar {
@@ -686,28 +687,28 @@
 }
 
 .logPanel::-webkit-scrollbar-thumb {
-  background: #333;
+  background: #d4d4d4;
   border-radius: 3px;
 }
 
 .logLine {
-  color: #6b7280;
+  color: #737373;
   padding: 1px 0;
 }
 
 .logTool {
-  color: #60a5fa;
+  color: #2563eb;
   font-weight: 500;
   margin-top: 6px;
 }
 
 .logResult {
-  color: #4b5563;
+  color: #525252;
   padding-left: 12px;
 }
 
 .logStage {
-  color: #fbbf24;
+  color: #b45309;
   font-weight: 600;
   margin-top: 10px;
   margin-bottom: 2px;
