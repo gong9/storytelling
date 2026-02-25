@@ -349,6 +349,12 @@ export class DeepReader {
     }).filter(ch => ch.content.length >= 50); // 过滤掉内容太短的章节
 
     console.log(`[DeepReader] 有效章节: ${chapters.length} 章`);
+    console.log('------- 章节列表 -------');
+    chapters.forEach((ch, i) => {
+      console.log(`  ${i + 1}. ${ch.title} (块 ${rlmChapters[i]?.chunkStart}-${rlmChapters[i]?.chunkEnd}, ${ch.content.length} 字)`);
+      if (ch.summary) console.log(`     ${ch.summary}`);
+    });
+    console.log('------------------------');
 
     // 知识图谱由 RLM 子 Agent 增量收集
     const knowledgeGraph = result.knowledgeGraph;
@@ -359,6 +365,9 @@ export class DeepReader {
     // 基于知识图谱自动生成全局背景
     const context = this.generateContextFromGraph(knowledgeGraph);
     console.log(`[DeepReader] 全局背景: ${context.length} 字`);
+    console.log('------- 全局背景内容 -------');
+    console.log(context);
+    console.log('---------------------------');
 
     return { context, chapters, knowledgeGraph };
   }
