@@ -290,7 +290,7 @@ function parseTranscriptionResult(result: Record<string, unknown>): Subtitle[] {
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, title, speed = 1, sessionId, episodeKey } = await request.json();
+    const { text, title, speed = 1.1, sessionId, episodeKey } = await request.json();
 
     if (!text || !text.trim()) {
       return NextResponse.json({ error: '缺少文本内容' }, { status: 400 });

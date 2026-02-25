@@ -707,7 +707,7 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
       const res = await fetch('/api/tts/episode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: body, title, speed: 1.3, sessionId, episodeKey }),
+        body: JSON.stringify({ text: body, title, speed: 1.1, sessionId, episodeKey }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);

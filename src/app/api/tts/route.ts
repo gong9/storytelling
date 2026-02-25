@@ -214,7 +214,7 @@ export async function POST(request: NextRequest) {
       filePath,
       voiceId,
       model = 'speech-2.8-hd',
-      speed = 1,
+      speed = 1.1,
     } = body;
 
     if (!filePath) {
