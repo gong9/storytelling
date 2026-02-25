@@ -823,6 +823,7 @@
   background: #fff;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .graphHeader {
@@ -866,6 +867,10 @@
   justify-content: center;
   padding: 12px;
   overflow: hidden;
+  /* MiroFish 风格点阵背景 - 产生 3D 感 */
+  background-color: #fafafa;
+  background-image: radial-gradient(#d0d0d0 1px, transparent 1px);
+  background-size: 20px 20px;
 }
 
 .graphSvg {
@@ -875,11 +880,10 @@
 
 .graphNode {
   cursor: pointer;
-  transition: opacity 0.2s;
 }
 
 .graphNode:hover {
-  opacity: 0.8;
+  /* D3 风格：悬浮由 JS 控制 */
 }
 
 .graphNodeLabel {
@@ -896,42 +900,54 @@
 }
 
 .graphLegend {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  padding: 10px 16px 14px;
-  border-top: 1px solid #f0f0f0;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+  border: 1px solid #eaeaea;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .legendItem {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-size: 11px;
-  color: #737373;
+  color: #555;
 }
 
 .legendDot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 .legendHint {
   font-size: 10px;
-  color: #d4d4d4;
-  margin-left: auto;
+  color: #aaa;
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid #e5e5e5;
 }
 
-/* Tooltip */
+/* Tooltip - MiroFish 风格 */
 .graphTooltip {
   position: absolute;
-  bottom: 60px;
-  left: 16px;
-  right: 16px;
-  background: rgba(23, 23, 23, 0.92);
-  color: #fff;
+  top: 12px;
+  right: 12px;
+  max-width: 200px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #333;
+  border: 1px solid #e0e0e0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   padding: 10px 14px;
   border-radius: 8px;
   font-size: 12px;
@@ -943,17 +959,19 @@
 .tooltipTitle {
   font-weight: 600;
   font-size: 13px;
+  color: #E91E63;
   margin-bottom: 4px;
 }
 
 .tooltipAlias {
-  color: #a3a3a3;
+  color: #888;
   font-size: 11px;
   margin-bottom: 4px;
 }
 
 .tooltipDesc {
-  color: #d4d4d4;
+  color: #555;
+  font-size: 11px;
 }
 
 /* ==================== 响应式 ==================== */

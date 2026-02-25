@@ -223,7 +223,7 @@ function useForceLayout(
     });
   }, [characters.length, relationships.length, width, height]);
 
-  // 简单的力模拟（斥力 + 引力）
+  // MiroFish 风格力导向模拟
   function runForceSimulation(
     pos: Record<string, { x: number; y: number }>,
     rels: KGRelationship[],
@@ -231,43 +231,75 @@ function useForceLayout(
     h: number,
     iterations: number
   ) {
-    const nodes = Object.keys(pos).map((id) => ({ id, ...pos[id] }));
+    const nodes = Object.keys(pos).map((id) => ({ id, ...pos[id], vx: 0, vy: 0 }));
     const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+    const centerX = w / 2, centerY = h / 2;
 
     for (let iter = 0; iter < iterations; iter++) {
-      // 斥力（节点间互斥）
+      const alpha = 1 - iter / iterations; // 逐渐衰减
+
+      // 1. 斥力（所有节点互斥，类似 D3 forceManyBody）
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i], b = nodes[j];
           const dx = b.x - a.x, dy = b.y - a.y;
           const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          const minDist = 70;
+          // 强斥力 -400 / dist^2（类似 D3）
+          const repulse = Math.min(300 / (dist * dist), 8) * alpha;
+          const fx = (dx / dist) * repulse;
+          const fy = (dy / dist) * repulse;
+          a.vx -= fx; a.vy -= fy;
+          b.vx += fx; b.vy += fy;
+        }
+      }
+
+      // 2. 链接引力（有关系的节点相吸，理想距离 120）
+      for (const rel of rels) {
+        const a = nodeMap.get(rel.from), b = nodeMap.get(rel.to);
+        if (!a || !b) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const idealDist = 120;
+        const force = (dist - idealDist) * 0.03 * alpha;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
+      }
+
+      // 3. 向心力（让图聚集在中心，类似 D3 forceX/forceY）
+      for (const n of nodes) {
+        n.vx += (centerX - n.x) * 0.008 * alpha;
+        n.vy += (centerY - n.y) * 0.008 * alpha;
+      }
+
+      // 4. 碰撞检测（节点不重叠，碰撞半径 40）
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const minDist = 50;
           if (dist < minDist) {
-            const force = (minDist - dist) / dist * 0.5;
-            const fx = dx * force, fy = dy * force;
+            const overlap = (minDist - dist) / 2;
+            const fx = (dx / dist) * overlap;
+            const fy = (dy / dist) * overlap;
             a.x -= fx; a.y -= fy;
             b.x += fx; b.y += fy;
           }
         }
       }
 
-      // 引力（有关系的节点相吸）
-      for (const rel of rels) {
-        const a = nodeMap.get(rel.from), b = nodeMap.get(rel.to);
-        if (!a || !b) continue;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const idealDist = 100;
-        if (dist > idealDist) {
-          const force = (dist - idealDist) / dist * 0.1;
-          const fx = dx * force, fy = dy * force;
-          a.x += fx; a.y += fy;
-          b.x -= fx; b.y -= fy;
-        }
+      // 5. 应用速度 + 阻尼
+      for (const n of nodes) {
+        n.x += n.vx;
+        n.y += n.vy;
+        n.vx *= 0.6; // 阻尼
+        n.vy *= 0.6;
       }
 
-      // 边界约束
-      const padding = 35;
+      // 6. 边界约束
+      const padding = 30;
       for (const n of nodes) {
         n.x = Math.max(padding, Math.min(w - padding, n.x));
         n.y = Math.max(padding, Math.min(h - padding, n.y));
@@ -305,10 +337,11 @@ function useForceLayout(
   return { positions, dragging, handleMouseDown, handleMouseMove, handleMouseUp };
 }
 
+// MiroFish 风格配色
 const ROLE_COLORS: Record<string, string> = {
-  protagonist: '#D4AF37',
-  antagonist: '#dc2626',
-  supporting: '#6b7280',
+  protagonist: '#FF6B35',  // 橙红 - 主角
+  antagonist: '#C5283D',   // 深红 - 反派
+  supporting: '#004E89',   // 深蓝 - 配角
 };
 
 function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | null; isLoading?: boolean }) {
@@ -370,7 +403,7 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
           onMouseLeave={handleMouseUp}
           style={{ cursor: dragging ? 'grabbing' : 'default' }}
         >
-          {/* 关系连线 */}
+          {/* 关系连线 - MiroFish 风格曲线 */}
           {relationships.map((rel, i) => {
             const from = positions[rel.from];
             const to = positions[rel.to];
@@ -378,23 +411,50 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
 
             const isHovered = hoveredRel === i || hoveredNode === rel.from || hoveredNode === rel.to;
             
+            // 计算同一对节点之间的边数量（用于曲线偏移）
+            const pairKey = [rel.from, rel.to].sort().join('_');
+            const sameEdges = relationships.filter(r => 
+              [r.from, r.to].sort().join('_') === pairKey
+            );
+            const edgeIndex = sameEdges.indexOf(rel);
+            const totalEdges = sameEdges.length;
+            
+            // 计算曲线路径
+            const dx = to.x - from.x, dy = to.y - from.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            
+            let path: string;
+            if (totalEdges === 1) {
+              // 单条边：直线
+              path = `M${from.x},${from.y} L${to.x},${to.y}`;
+            } else {
+              // 多条边：曲线，根据索引偏移
+              const curvature = ((edgeIndex / (totalEdges - 1)) - 0.5) * 0.8;
+              const offsetX = -dy / dist * curvature * Math.max(40, dist * 0.3);
+              const offsetY = dx / dist * curvature * Math.max(40, dist * 0.3);
+              const cx = (from.x + to.x) / 2 + offsetX;
+              const cy = (from.y + to.y) / 2 + offsetY;
+              path = `M${from.x},${from.y} Q${cx},${cy} ${to.x},${to.y}`;
+            }
+            
             return (
-              <line
+              <path
                 key={i}
-                x1={from.x}
-                y1={from.y}
-                x2={to.x}
-                y2={to.y}
-                stroke={isHovered ? '#737373' : '#e5e5e5'}
-                strokeWidth={isHovered ? 2 : 1}
-                style={{ transition: 'stroke 0.2s, stroke-width 0.2s' }}
+                d={path}
+                fill="none"
+                stroke={isHovered ? '#3498db' : '#c0c0c0'}
+                strokeWidth={isHovered ? 2.5 : 1.5}
+                style={{ 
+                  transition: 'stroke 0.15s, stroke-width 0.15s',
+                  cursor: 'pointer'
+                }}
                 onMouseEnter={() => setHoveredRel(i)}
                 onMouseLeave={() => setHoveredRel(null)}
               />
             );
           })}
           
-          {/* 人物节点 */}
+          {/* 人物节点 - MiroFish 风格 */}
           {characters.map((char) => {
             const pos = positions[char.id];
             if (!pos) return null;
@@ -402,7 +462,11 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
             const color = ROLE_COLORS[char.role] || ROLE_COLORS.supporting;
             const isHovered = hoveredNode === char.id;
             const isDragging = dragging === char.id;
-            const nodeRadius = isHovered || isDragging ? 32 : 28;
+            const isActive = isHovered || isDragging;
+            // MiroFish 风格：r=10，白色描边
+            const nodeRadius = isActive ? 12 : 10;
+            const strokeWidth = isActive ? 3 : 2;
+            const strokeColor = isActive ? '#333' : '#fff';
             
             return (
               <g
@@ -411,40 +475,39 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
                 onMouseDown={(e) => handleMouseDown(char.id, e)}
                 onMouseEnter={() => setHoveredNode(char.id)}
                 onMouseLeave={() => setHoveredNode(null)}
-                style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+                style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
               >
+                {/* 主节点圆 - 带白色描边 */}
                 <circle
                   cx={pos.x}
                   cy={pos.y}
                   r={nodeRadius}
                   fill={color}
-                  opacity={isHovered || isDragging ? 0.25 : 0.12}
-                  style={{ transition: 'r 0.15s, opacity 0.15s' }}
+                  stroke={strokeColor}
+                  strokeWidth={strokeWidth}
+                  style={{ transition: 'r 0.15s, stroke 0.15s, stroke-width 0.15s' }}
                 />
-                <circle
-                  cx={pos.x}
-                  cy={pos.y}
-                  r={nodeRadius}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={isHovered || isDragging ? 2.5 : 1.5}
-                  style={{ transition: 'r 0.15s, stroke-width 0.15s' }}
-                />
+                {/* 节点标签 - 始终显示，截断长名字 */}
                 <text
-                  x={pos.x}
-                  y={pos.y + 5}
+                  x={pos.x + 14}
+                  y={pos.y + 4}
                   className={styles.graphNodeLabel}
-                  textAnchor="middle"
-                  style={{ pointerEvents: 'none' }}
+                  style={{
+                    pointerEvents: 'none',
+                    fontWeight: isActive ? 600 : 500,
+                    fontSize: 11,
+                    fill: isActive ? '#171717' : '#525252',
+                    transition: 'fill 0.15s',
+                  }}
                 >
-                  {char.name.length > 3 ? char.name.slice(0, 3) : char.name}
+                  {char.name.length > 6 ? char.name.slice(0, 6) + '…' : char.name}
                 </text>
               </g>
             );
           })}
         </svg>
 
-        {/* Tooltip */}
+        {/* Tooltip - 右上角详情面板 */}
         {(hoveredChar || hoveredRelData) && (
           <div className={styles.graphTooltip}>
             {hoveredChar && (
@@ -471,23 +534,23 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
             )}
           </div>
         )}
-      </div>
-      
-      {/* 图例 */}
-      <div className={styles.graphLegend}>
-        <span className={styles.legendItem}>
-          <span className={styles.legendDot} style={{ background: '#D4AF37' }} />
-          主角
-        </span>
-        <span className={styles.legendItem}>
-          <span className={styles.legendDot} style={{ background: '#dc2626' }} />
-          反派
-        </span>
-        <span className={styles.legendItem}>
-          <span className={styles.legendDot} style={{ background: '#6b7280' }} />
-          配角
-        </span>
-        <span className={styles.legendHint}>可拖拽调整</span>
+        
+        {/* 图例 - 左下角 */}
+        <div className={styles.graphLegend}>
+          <span className={styles.legendItem}>
+            <span className={styles.legendDot} style={{ background: '#FF6B35' }} />
+            主角
+          </span>
+          <span className={styles.legendItem}>
+            <span className={styles.legendDot} style={{ background: '#C5283D' }} />
+            反派
+          </span>
+          <span className={styles.legendItem}>
+            <span className={styles.legendDot} style={{ background: '#004E89' }} />
+            配角
+          </span>
+          <span className={styles.legendHint}>拖拽调整</span>
+        </div>
       </div>
     </div>
   );
