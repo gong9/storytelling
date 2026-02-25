@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { cleanForTTS } from '@/lib/deep-reader';
+import { getSession, updateSession } from '@/lib/session-store';
 
 const MINIMAX_API_BASE = 'https://api.minimaxi.com';
 
@@ -101,7 +102,7 @@ async function synthesizeAudio(
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, title, speed = 1 } = await request.json();
+    const { text, title, speed = 1, sessionId, episodeKey } = await request.json();
 
     if (!text || !text.trim()) {
       return NextResponse.json({ error: '缺少文本内容' }, { status: 400 });
@@ -137,6 +138,16 @@ export async function POST(request: NextRequest) {
 
     const audioPath = `out/audio/${fileName}`;
     console.log(`[TTS Episode] 完成: ${audioPath} (${audioBuffer.length} bytes)`);
+
+    // 保存 TTS 结果到 session
+    if (sessionId && episodeKey) {
+      const session = getSession(sessionId);
+      if (session) {
+        if (!session.ttsResults) session.ttsResults = {};
+        session.ttsResults[episodeKey] = audioPath;
+        updateSession(session);
+      }
+    }
 
     return NextResponse.json({
       success: true,

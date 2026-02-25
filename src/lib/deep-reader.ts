@@ -170,6 +170,8 @@ export interface DeepReaderSession {
   timestamp: string;
   completedChapters: number[];
   createdAt: number;
+  /** 每回 TTS 生成结果：key = "chapterIdx:episodeTitle", value = audioPath */
+  ttsResults?: Record<string, string>;
 }
 
 /** 章节处理进度回调 */

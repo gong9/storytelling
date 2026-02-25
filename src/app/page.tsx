@@ -153,9 +153,27 @@ function SpeakerIcon({ className }: { className?: string }) {
 
 type TtsStatus = 'idle' | 'loading' | 'done' | 'playing' | 'error';
 
-function PreviewSections({ content }: { content: string }) {
+function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
+  content: string;
+  sessionId?: string;
+  chapterIdx?: number;
+  initialTts?: Record<string, string>;
+}) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
-  const [ttsMap, setTtsMap] = useState<Record<number, { status: TtsStatus; path?: string; error?: string }>>({});
+  // 从 session 恢复已生成的 TTS 状态
+  const [ttsMap, setTtsMap] = useState<Record<number, { status: TtsStatus; path?: string; error?: string }>>(() => {
+    if (!initialTts) return {};
+    const restored: Record<number, { status: TtsStatus; path?: string }> = {};
+    for (const [key, audioPath] of Object.entries(initialTts)) {
+      // key 格式: "chapterIdx:sectionIdx"
+      const parts = key.split(':');
+      if (parts.length === 2 && parseInt(parts[0]) === chapterIdx) {
+        const sectionIdx = parseInt(parts[1]);
+        restored[sectionIdx] = { status: 'done', path: audioPath };
+      }
+    }
+    return restored;
+  });
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingIdx, setPlayingIdx] = useState<number | null>(null);
 
@@ -163,10 +181,11 @@ function PreviewSections({ content }: { content: string }) {
     setTtsMap((prev) => ({ ...prev, [idx]: { status: 'loading' } }));
 
     try {
+      const episodeKey = `${chapterIdx}:${idx}`;
       const res = await fetch('/api/tts/episode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: body, title, speed: 1.3 }),
+        body: JSON.stringify({ text: body, title, speed: 1.3, sessionId, episodeKey }),
       });
 
       const data = await res.json();
@@ -179,7 +198,7 @@ function PreviewSections({ content }: { content: string }) {
         [idx]: { status: 'error', error: err instanceof Error ? err.message : '合成失败' },
       }));
     }
-  }, []);
+  }, [sessionId, chapterIdx]);
 
   const handlePlay = useCallback((idx: number, audioPath: string) => {
     // 停止当前播放
@@ -317,6 +336,7 @@ export default function Home() {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [previewContent, setPreviewContent] = useState<string>('');
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [sessionTts, setSessionTts] = useState<Record<string, string>>({});
 
   // 实时日志
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -589,6 +609,13 @@ export default function Home() {
             status: (s.completedChapters || []).includes(i) ? 'done' : 'pending',
           }))
         );
+      }
+
+      // 恢复 TTS 结果
+      if (data.session?.ttsResults) {
+        setSessionTts(data.session.ttsResults);
+      } else {
+        setSessionTts({});
       }
 
       setLogs([]);
@@ -920,7 +947,12 @@ export default function Home() {
                     {previewLoading ? (
                       <div className={styles.previewLoading}>加载中...</div>
                     ) : (
-                      <PreviewSections content={previewContent} />
+                      <PreviewSections
+                        content={previewContent}
+                        sessionId={session?.sessionId}
+                        chapterIdx={previewIndex}
+                        initialTts={sessionTts}
+                      />
                     )}
                   </div>
                 </div>
