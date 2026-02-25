@@ -517,33 +517,6 @@
   margin: 0;
 }
 
-/* ==================== 字幕面板 ==================== */
-
-.subtitlePanel {
-  padding: 16px 20px 20px;
-  max-height: 400px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.subtitleLine {
-  display: block;
-  font-size: 15px;
-  line-height: 1.8;
-  color: #a3a3a3;
-  padding: 4px 8px;
-  border-radius: 4px;
-  transition: color 0.3s, background 0.3s;
-}
-
-.subtitleActive {
-  color: #171717;
-  background: #fdfbf3;
-  font-weight: 500;
-}
-
 .chapterActive .chapterTitle {
   color: #D4AF37;
 }
