@@ -1,0 +1,11 @@
+{
+  "EMPTY_DOCUMENT": "文档内容为空或太短，无法处理",
+  "NO_OUTPUT": "阅读完成但未生成输出",
+  "OUTPUT_UPDATED": "输出已更新",
+  "OUTPUT_EMPTY": "（输出为空）",
+  "CHUNK_NOT_FOUND": "块 {{index}} 不存在",
+  "UNKNOWN_TOOL": "未知工具: {{name}}",
+  "READER_ERROR": "阅读助手出错: {{message}}",
+  "PROCESS_ERROR": "阅读过程出错: {{message}}",
+  "TOO_MANY_MESSAGES": "[RLMReader] 消息过多，强制结束"
+}

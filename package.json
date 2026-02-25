@@ -1,0 +1,27 @@
+{
+  "name": "storytelling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI 评书改编 + TTS 语音合成",
+  "scripts": {
+    "dev": "next dev -p 3100",
+    "build": "next build",
+    "start": "next start -p 3100"
+  },
+  "dependencies": {
+    "next": "14.2.25",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "deepagents": "^1.5.0",
+    "@langchain/core": "^1.1.15",
+    "@langchain/openai": "^1.2.2",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.0",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0"
+  }
+}

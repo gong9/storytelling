@@ -1,0 +1,17 @@
+## 你的工具
+
+### 了解文档
+- get_document_stats(): 获取文档统计（总字数、总块数、平均块大小）
+- get_chunk_list(): 获取所有块的概览（每块的首句预览）
+- search_document(keyword): 搜索包含关键词的块
+
+### 阅读内容  
+- read_chunk(index): 读取第 N 块的完整内容
+- spawn_reader(chunkIndexes, question): 派助手阅读指定块并回答问题
+
+### 记录输出
+- update_output(content): 更新输出内容
+- get_output(): 查看当前输出
+
+### 结束任务
+- done(): 完成任务后调用此工具结束流程（必须调用！）
