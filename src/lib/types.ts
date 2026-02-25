@@ -256,12 +256,22 @@ export interface ChunkPreview {
   charCount: number;
 }
 
+/** RLM 章节片段（由子 Agent 识别） */
+export interface RLMChapterSegment {
+  chunkStart: number;
+  chunkEnd: number;
+  title: string;
+  summary: string;
+}
+
 /** RLM 阅读器输出 */
 export interface RLMOutput {
   content: string;
   metadata?: Record<string, unknown>;
   /** 增量收集的知识图谱（由子 Agent 在阅读过程中提取） */
   knowledgeGraph?: KnowledgeGraph;
+  /** 增量收集的章节划分（由子 Agent 在阅读过程中识别，已合并） */
+  chapters?: RLMChapterSegment[];
 }
 
 // ==================== RLM 任务配置 ====================

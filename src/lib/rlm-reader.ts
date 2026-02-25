@@ -107,6 +107,14 @@ export class RLMReader {
   // 增量收集的知识图谱数据
   private collectedCharacters: Map<string, Character> = new Map();
   private collectedRelationships: Relationship[] = [];
+  
+  // 增量收集的章节片段
+  private collectedChapterSegments: Array<{
+    chunkStart: number;
+    chunkEnd: number;
+    title: string;
+    summary: string;
+  }> = [];
 
   constructor(config: RLMReaderConfig = {}) {
     this.config = {
@@ -359,8 +367,8 @@ export class RLMReader {
       
       console.log(`  -> 子Agent返回 ${answer.length.toLocaleString()} 字`);
       
-      // 解析增量人物/关系数据
-      this.parseAndLogGraphUpdate(answer);
+      // 解析增量人物/关系/章节数据
+      this.parseSubAgentOutput(answer);
       
       return answer;
     } catch (error) {
@@ -370,17 +378,20 @@ export class RLMReader {
   }
 
   /**
-   * 解析子 Agent 返回中的人物/关系数据，保存到收集器并输出日志
+   * 解析子 Agent 返回中的人物/关系/章节数据，保存到收集器并输出日志
    */
-  private parseAndLogGraphUpdate(answer: string): void {
+  private parseSubAgentOutput(answer: string): void {
     try {
       // 提取 ```characters [...] ```
       const charsMatch = answer.match(/```characters\s*([\s\S]*?)```/);
       // 提取 ```relationships [...] ```
       const relsMatch = answer.match(/```relationships\s*([\s\S]*?)```/);
+      // 提取 ```chapters [...] ```
+      const chaptersMatch = answer.match(/```chapters\s*([\s\S]*?)```/);
 
       let characters: Character[] = [];
       let relationships: Relationship[] = [];
+      let chapters: Array<{ chunkStart: number; chunkEnd: number; title: string; summary: string }> = [];
 
       if (charsMatch) {
         try {
@@ -393,6 +404,14 @@ export class RLMReader {
       if (relsMatch) {
         try {
           relationships = JSON.parse(relsMatch[1].trim()) as Relationship[];
+        } catch {
+          // 解析失败，忽略
+        }
+      }
+
+      if (chaptersMatch) {
+        try {
+          chapters = JSON.parse(chaptersMatch[1].trim());
         } catch {
           // 解析失败，忽略
         }
@@ -422,6 +441,20 @@ export class RLMReader {
               to: rel.to,
               type: rel.type,
               description: rel.description || '',
+            });
+          }
+        }
+      }
+
+      // 收集章节片段
+      if (Array.isArray(chapters)) {
+        for (const ch of chapters) {
+          if (ch && ch.chunkStart && ch.chunkEnd && ch.title) {
+            this.collectedChapterSegments.push({
+              chunkStart: ch.chunkStart,
+              chunkEnd: ch.chunkEnd,
+              title: ch.title,
+              summary: ch.summary || '',
             });
           }
         }
@@ -461,6 +494,76 @@ export class RLMReader {
         result.push(rel);
       }
     }
+    return result;
+  }
+
+  /**
+   * 获取收集的章节划分（合并相邻的同名章节）
+   */
+  getCollectedChapters(): Array<{ chunkStart: number; chunkEnd: number; title: string; summary: string }> {
+    if (this.collectedChapterSegments.length === 0) {
+      return [];
+    }
+
+    // 按 chunkStart 排序
+    const sorted = [...this.collectedChapterSegments].sort((a, b) => a.chunkStart - b.chunkStart);
+
+    // 合并相邻或重叠的同名章节
+    const merged: typeof sorted = [];
+    for (const seg of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && last.title === seg.title && seg.chunkStart <= last.chunkEnd + 1) {
+        // 合并：扩展结束位置，合并概要
+        last.chunkEnd = Math.max(last.chunkEnd, seg.chunkEnd);
+        if (seg.summary && !last.summary.includes(seg.summary)) {
+          last.summary = last.summary ? `${last.summary}；${seg.summary}` : seg.summary;
+        }
+      } else {
+        merged.push({ ...seg });
+      }
+    }
+
+    // 如果合并后章节太多（超过 30 章），进一步合并小章节
+    if (merged.length > 30) {
+      return this.consolidateChapters(merged);
+    }
+
+    return merged;
+  }
+
+  /**
+   * 合并过多的小章节（目标：每章至少覆盖 10 个块）
+   */
+  private consolidateChapters(
+    chapters: Array<{ chunkStart: number; chunkEnd: number; title: string; summary: string }>
+  ): Array<{ chunkStart: number; chunkEnd: number; title: string; summary: string }> {
+    const result: typeof chapters = [];
+    let current: typeof chapters[0] | null = null;
+
+    for (const ch of chapters) {
+      if (!current) {
+        current = { ...ch };
+        continue;
+      }
+
+      const currentSize = current.chunkEnd - current.chunkStart + 1;
+      const nextSize = ch.chunkEnd - ch.chunkStart + 1;
+
+      // 如果当前章节太小（< 10 块），合并到下一个
+      if (currentSize < 10 || nextSize < 5) {
+        current.chunkEnd = ch.chunkEnd;
+        current.title = currentSize >= nextSize ? current.title : ch.title;
+        current.summary = `${current.summary}；${ch.summary}`;
+      } else {
+        result.push(current);
+        current = { ...ch };
+      }
+    }
+
+    if (current) {
+      result.push(current);
+    }
+
     return result;
   }
 
@@ -583,9 +686,10 @@ export class RLMReader {
     this.toolCallCount = 0;
     this.readChunksSet.clear();
     
-    // 清空图谱收集器
+    // 清空收集器
     this.collectedCharacters.clear();
     this.collectedRelationships = [];
+    this.collectedChapterSegments = [];
     
     // 生成文档唯一标识和 thread_id
     this.documentId = this.generateDocumentId(input.content);
@@ -725,38 +829,15 @@ export class RLMReader {
         invokeConfig
       );
 
-      // 如果 agent 结束时没有调用 update_output，强制提醒它
-      if (!this.output || this.output.length < 100) {
-        console.log('');
-        console.log('[RLM] ⚠️ Agent 未生成输出，发送提醒...');
-        
-        const reminderMessage = `你已经阅读完全部内容，但忘记保存输出了！
-
-请立即执行：
-1. 根据阅读内容，生成章节划分 JSON
-2. 调用 update_output(章节划分JSON) 保存
-3. 调用 done() 完成任务
-
-章节划分 JSON 格式：
-\`\`\`json
-[
-  {"title": "章节标题", "startChunk": 1, "endChunk": 20, "summary": "一句话概要"},
-  ...
-]
-\`\`\``;
-
-        await agent.invoke(
-          { messages: [{ role: 'user', content: reminderMessage }] },
-          invokeConfig
-        );
-      }
-
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       const rawGraph = this.getCollectedGraph();
+      const chapters = this.getCollectedChapters();
+      
       console.log('');
       console.log('========== RLM 阅读完成 ==========');
-      console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒, 输出 ${(this.output || '').length.toLocaleString()} 字`);
+      console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒`);
       console.log(`原始图谱: ${rawGraph.characters.length} 人物, ${rawGraph.relationships.length} 关系`);
+      console.log(`章节片段: ${this.collectedChapterSegments.length} 个 → 合并后 ${chapters.length} 章`);
       
       // 使用 LLM 整合图谱（合并别名、去重、评估重要性）
       const mergedGraph = rawGraph.characters.length > 0 
@@ -766,12 +847,13 @@ export class RLMReader {
       console.log('');
       
       return {
-        content: this.output || RLM_MESSAGES.NO_OUTPUT,
+        content: this.output || '',
         metadata: {
           totalChunks: this.chunks.length,
           task: this.config.task.purpose,
         },
         knowledgeGraph: mergedGraph,
+        chapters: chapters.length > 0 ? chapters : undefined,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -785,10 +867,12 @@ export class RLMReader {
       // 如果是递归限制错误，返回当前已有的输出
       if (errorMessage.includes('GRAPH_RECURSION_LIMIT') || errorMessage.includes('Recursion limit')) {
         const rawGraph = this.getCollectedGraph();
+        const chapters = this.getCollectedChapters();
         console.log('');
         console.log('========== RLM 达到递归限制 ==========');
-        console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒, 当前输出 ${(this.output || '').length.toLocaleString()} 字`);
+        console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒`);
         console.log(`原始图谱: ${rawGraph.characters.length} 人物, ${rawGraph.relationships.length} 关系`);
+        console.log(`章节片段: ${this.collectedChapterSegments.length} 个 → 合并后 ${chapters.length} 章`);
         console.log('提示: 已达到最大循环次数，返回当前结果');
         
         // 使用 LLM 整合图谱
@@ -799,13 +883,14 @@ export class RLMReader {
         console.log('');
         
         return {
-          content: this.output || RLM_MESSAGES.NO_OUTPUT,
+          content: this.output || '',
           metadata: {
             totalChunks: this.chunks.length,
             task: this.config.task.purpose,
             warning: '达到递归限制，结果可能不完整',
           },
           knowledgeGraph: mergedGraph,
+          chapters: chapters.length > 0 ? chapters : undefined,
         };
       }
       

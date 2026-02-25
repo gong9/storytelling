@@ -306,37 +306,12 @@ export class DeepReader {
 
     console.log('[DeepReader] 生成全局上下文 + 智能章节划分...');
 
+    // 主 Agent 只需阅读全文，章节由子 Agent 增量识别
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
-        purpose: '全面阅读文档，根据内容语义智能划分章节。',
-        outputFormat: `
-请根据内容语义将全文划分为若干章节。
-
-要求：
-- 每章 10000-20000 字为宜（不要太短也不要太长）
-- 跳过目录、版权页、序言、附录等非正文内容
-- 按故事情节的自然段落来划分，不必完全遵循原书章节
-- 给每章起一个有吸引力的标题
-
-用以下 JSON 格式输出（必须是合法 JSON 数组）：
-\`\`\`json
-[
-  {"title": "章节标题", "startChunk": 1, "endChunk": 10, "summary": "一句话概要"},
-  {"title": "章节标题", "startChunk": 11, "endChunk": 25, "summary": "一句话概要"}
-]
-\`\`\`
-
-注意：
-- startChunk 和 endChunk 是你阅读过的块编号（从 1 开始）
-- 确保所有正文块都被覆盖，不要遗漏
-- 章节数量根据文档长度灵活调整，通常 5-20 章
-
-⚠️ 必须执行：
-1. 读完全部内容后，生成章节划分 JSON
-2. 调用 update_output(章节划分JSON) 保存
-3. 调用 done() 结束任务
-`,
+        purpose: '全面阅读文档，理解故事结构和人物关系。子 Agent 会自动识别章节边界和提取人物信息。',
+        outputFormat: '阅读完成后，直接调用 done() 结束任务即可。章节划分和人物关系由子 Agent 自动提取。',
       },
       model: this.config.model,
       baseURL: this.config.baseURL,
@@ -344,11 +319,36 @@ export class DeepReader {
     });
 
     const result = await reader.read({ content, title });
-    const output = result.content || '';
 
-    // 主 Agent 只输出章节划分 JSON，直接解析
-    const chapters = this.parseChapterPlan(output, content);
-    console.log(`[DeepReader] 智能章节划分: ${chapters.length} 章`);
+    // 章节由子 Agent 增量识别并合并
+    const rlmChapters = result.chapters || [];
+    console.log(`[DeepReader] RLM 章节识别: ${rlmChapters.length} 章`);
+
+    // 将 RLM 章节格式转换为 DeepReader 章节格式
+    const chunks: string[] = splitIntoParagraphs(content, 2000);
+    const chapters: Chapter[] = rlmChapters.map((ch, i) => {
+      const start = Math.max(1, ch.chunkStart);
+      const end = Math.min(chunks.length, ch.chunkEnd);
+      const chapterContent = chunks.slice(start - 1, end).join('\n\n');
+      
+      // 计算字符偏移量
+      let charStart = 0;
+      for (let j = 0; j < start - 1; j++) {
+        charStart += chunks[j].length + 2; // +2 for '\n\n'
+      }
+      const charEnd = charStart + chapterContent.length;
+
+      return {
+        index: i,
+        title: ch.title,
+        summary: ch.summary,
+        content: chapterContent,
+        charStart,
+        charEnd,
+      };
+    }).filter(ch => ch.content.length >= 50); // 过滤掉内容太短的章节
+
+    console.log(`[DeepReader] 有效章节: ${chapters.length} 章`);
 
     // 知识图谱由 RLM 子 Agent 增量收集
     const knowledgeGraph = result.knowledgeGraph;
