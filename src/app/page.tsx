@@ -186,11 +186,20 @@ function useForceLayout(
   characters: KGCharacter[],
   relationships: KGRelationship[],
   width: number,
-  height: number
+  height: number,
+  zoom: number = 1,
+  pan: { x: number; y: number } = { x: 0, y: 0 }
 ) {
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [dragging, setDragging] = useState<string | null>(null);
-  const dragOffset = useRef({ x: 0, y: 0 });
+  const zoomRef = useRef(zoom);
+  const panRef = useRef(pan);
+  
+  // 更新 ref（每次渲染时同步）
+  useEffect(() => {
+    zoomRef.current = zoom;
+    panRef.current = pan;
+  });
 
   // 初始化或更新节点位置
   useEffect(() => {
@@ -315,17 +324,31 @@ function useForceLayout(
   const handleMouseDown = (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     setDragging(id);
-    const pos = positions[id];
-    if (pos) {
-      dragOffset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
-    }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragging) return;
     const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    
+    // 获取当前缩放和平移
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    
+    // 鼠标在 SVG 中的位置
+    const svgX = e.clientX - rect.left;
+    const svgY = e.clientY - rect.top;
+    
+    // 转换为画布坐标（考虑缩放和平移）
+    // SVG viewBox 映射
+    const scaleX = width / rect.width;
+    const scaleY = height / rect.height;
+    const viewX = svgX * scaleX;
+    const viewY = svgY * scaleY;
+    
+    // 反向应用变换: translate(W/2 + pan.x, H/2 + pan.y) scale(zoom) translate(-W/2, -H/2)
+    const x = (viewX - width / 2 - currentPan.x) / currentZoom + width / 2;
+    const y = (viewY - height / 2 - currentPan.y) / currentZoom + height / 2;
+    
     setPositions((prev) => ({
       ...prev,
       [dragging]: { x: Math.max(35, Math.min(width - 35, x)), y: Math.max(35, Math.min(height - 35, y)) },
@@ -389,7 +412,9 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
     characters,
     relationships,
     WIDTH,
-    HEIGHT
+    HEIGHT,
+    zoom,
+    pan
   );
 
   // 缩放处理（鼠标滚轮）
