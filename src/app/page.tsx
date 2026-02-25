@@ -353,8 +353,8 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
   const lastPanPos = useRef({ x: 0, y: 0 });
 
   // 增大画布尺寸
-  const WIDTH = 560;
-  const HEIGHT = 480;
+  const WIDTH = 680;
+  const HEIGHT = 580;
 
   const characters = graph?.characters || [];
   const relationships = graph?.relationships || [];
