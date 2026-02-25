@@ -347,14 +347,14 @@ const ROLE_COLORS: Record<string, string> = {
 function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | null; isLoading?: boolean }) {
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [hoveredRel, setHoveredRel] = useState<number | null>(null);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(0.85); // 默认稍微缩小，确保全部可见
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const lastPanPos = useRef({ x: 0, y: 0 });
 
-  // 增大画布尺寸
-  const WIDTH = 800;
-  const HEIGHT = 680;
+  // 画布尺寸 - 适配一屏展示
+  const WIDTH = 1200;
+  const HEIGHT = 600;
 
   const characters = graph?.characters || [];
   const relationships = graph?.relationships || [];
@@ -397,7 +397,7 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
 
   // 重置视图
   const resetView = useCallback(() => {
-    setZoom(1);
+    setZoom(0.85);
     setPan({ x: 0, y: 0 });
   }, []);
 

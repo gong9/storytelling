@@ -665,16 +665,16 @@
 }
 
 .logPanel {
-  height: 160px;
+  height: 140px;
   flex-shrink: 0;
   overflow-y: auto;
-  padding: 12px 20px;
+  overflow-x: hidden;
+  padding: 10px 16px;
   background: #1a1a1a;
   font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
   font-size: 11px;
   line-height: 1.5;
   color: #888;
-  border-top: 1px solid #333;
 }
 
 .logPanel::-webkit-scrollbar {
