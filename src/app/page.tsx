@@ -337,11 +337,11 @@ function useForceLayout(
   return { positions, dragging, handleMouseDown, handleMouseMove, handleMouseUp };
 }
 
-// MiroFish 风格配色
+// 专业配色方案
 const ROLE_COLORS: Record<string, string> = {
-  protagonist: '#FF6B35',  // 橙红 - 主角
-  antagonist: '#C5283D',   // 深红 - 反派
-  supporting: '#004E89',   // 深蓝 - 配角
+  protagonist: '#f97316',  // 橙色 - 主角
+  antagonist: '#ef4444',   // 红色 - 反派
+  supporting: '#3b82f6',   // 蓝色 - 配角
 };
 
 function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | null; isLoading?: boolean }) {
@@ -588,21 +588,21 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
           </div>
         )}
         
-        {/* 图例 - 左下角 */}
+        {/* 图例 */}
         <div className={styles.graphLegend}>
           <span className={styles.legendItem}>
-            <span className={styles.legendDot} style={{ background: '#FF6B35' }} />
+            <span className={styles.legendDot} style={{ background: '#f97316' }} />
             主角
           </span>
           <span className={styles.legendItem}>
-            <span className={styles.legendDot} style={{ background: '#C5283D' }} />
+            <span className={styles.legendDot} style={{ background: '#ef4444' }} />
             反派
           </span>
           <span className={styles.legendItem}>
-            <span className={styles.legendDot} style={{ background: '#004E89' }} />
+            <span className={styles.legendDot} style={{ background: '#3b82f6' }} />
             配角
           </span>
-          <span className={styles.legendHint}>拖拽调整</span>
+          <span className={styles.legendHint}>可拖拽</span>
         </div>
       </div>
     </div>
