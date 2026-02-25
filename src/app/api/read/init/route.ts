@@ -53,18 +53,6 @@ export async function POST(request: NextRequest) {
           return;
         }
 
-        // 匹配增量图谱更新 [GRAPH_UPDATE] {...}
-        if (msg.includes('[GRAPH_UPDATE]')) {
-          const jsonStr = msg.replace(/.*\[GRAPH_UPDATE\]\s*/, '').trim();
-          try {
-            const graphData = JSON.parse(jsonStr);
-            send({ type: 'graph_update', data: graphData });
-          } catch {
-            // 解析失败，忽略
-          }
-          return;
-        }
-
         // 匹配关键阶段
         if (msg.includes('RLM 文档阅读开始')) {
           send({ type: 'stage', stage: 'context', message: '正在生成全局上下文...' });
@@ -125,19 +113,14 @@ export async function POST(request: NextRequest) {
         });
 
         // 初始化 DeepReader 会话（包含章节切分 + 全局上下文生成）
-        const reader = new DeepReader({ task: DEEP_TASK_PINGSHU, model: 'qwen-plus' });
+        const reader = new DeepReader({ 
+          task: DEEP_TASK_PINGSHU, 
+          model: 'qwen-plus',
+        });
         const session = await reader.initSession({ content, title: fileName });
 
         // 存储会话
         setSession(session);
-
-        // 推送知识图谱（在 done 之前）
-        if (session.knowledgeGraph) {
-          send({
-            type: 'knowledge_graph',
-            data: session.knowledgeGraph,
-          });
-        }
 
         // 最终结果
         send({

@@ -5,19 +5,9 @@
 
 ---
 
-回答完问题后，请在答案末尾追加以下信息：
+请根据以上内容回答问题。在答案末尾，请识别章节边界：
 
-## 1. 人物提取（如果本段有新出现的人物或关系）
-
-```characters
-[{"id": "人物id", "name": "姓名", "role": "protagonist/antagonist/supporting", "description": "一句话描述"}]
-```
-
-```relationships
-[{"from": "人物id", "to": "人物id", "type": "关系类型", "description": "关系描述"}]
-```
-
-## 2. 章节识别（必须输出）
+## 章节识别
 
 识别这批内容属于故事的哪个章节/阶段，以及是否存在章节边界（场景转换、时间跳跃、地点变化等）。
 
@@ -30,8 +20,5 @@
 - 如果这批块 21-40 跨越两章：`[{"chunkStart": 21, "chunkEnd": 28, "title": "严党倒台", "summary": "..."},{"chunkStart": 29, "chunkEnd": 40, "title": "海瑞上疏", "summary": "..."}]`
 
 注意：
-- 人物：只提取本段**新出现**的重要人物（次要路人不用提取）
-- id 用小写英文+下划线，如 zhu_yuanzhang
 - 章节标题要有吸引力，能概括该段的核心情节
-- 如果本段没有新人物/关系，可以不输出 characters/relationships 代码块
 - chapters 代码块**必须输出**

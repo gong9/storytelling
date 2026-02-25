@@ -268,8 +268,6 @@ export interface RLMChapterSegment {
 export interface RLMOutput {
   content: string;
   metadata?: Record<string, unknown>;
-  /** 增量收集的知识图谱（由子 Agent 在阅读过程中提取） */
-  knowledgeGraph?: KnowledgeGraph;
   /** 增量收集的章节划分（由子 Agent 在阅读过程中识别，已合并） */
   chapters?: RLMChapterSegment[];
 }
@@ -392,57 +390,3 @@ export interface DeepReaderOutput {
   duration: number;
 }
 
-// ==================== 知识图谱类型 ====================
-
-/** 人物角色类型 */
-export type CharacterRole = 'protagonist' | 'antagonist' | 'supporting';
-
-/** 人物信息 */
-export interface Character {
-  /** 唯一标识（用于前端渲染和关系引用） */
-  id: string;
-  /** 人物名称 */
-  name: string;
-  /** 别名/外号 */
-  aliases?: string[];
-  /** 角色类型 */
-  role: CharacterRole;
-  /** 一句话描述 */
-  description: string;
-}
-
-/** 人物关系 */
-export interface Relationship {
-  /** 关系起点人物 id */
-  from: string;
-  /** 关系终点人物 id */
-  to: string;
-  /** 关系类型（夫妻/父子/主仆/敌对/同盟等） */
-  type: string;
-  /** 关系描述 */
-  description?: string;
-}
-
-/** 故事事件 */
-export interface StoryEvent {
-  /** 唯一标识 */
-  id: string;
-  /** 事件名称 */
-  name: string;
-  /** 涉及的人物 id 列表 */
-  characters: string[];
-  /** 出现的章节索引 */
-  chapter?: number;
-  /** 事件描述 */
-  description: string;
-}
-
-/** 知识图谱 */
-export interface KnowledgeGraph {
-  /** 人物列表 */
-  characters: Character[];
-  /** 关系列表 */
-  relationships: Relationship[];
-  /** 事件列表 */
-  events: StoryEvent[];
-}

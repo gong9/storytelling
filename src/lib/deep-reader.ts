@@ -32,7 +32,6 @@ import type {
   DeepReadTaskConfig,
   DeepReaderOutput,
   DocumentInput,
-  KnowledgeGraph,
 } from './types';
 
 // ==================== TTS 文本清洗 ====================
@@ -174,8 +173,6 @@ export interface DeepReaderSession {
   createdAt: number;
   /** 每回 TTS 生成结果：key = "chapterIdx:episodeTitle", value = audioPath */
   ttsResults?: Record<string, string>;
-  /** 知识图谱（人物/关系/事件） */
-  knowledgeGraph?: KnowledgeGraph;
 }
 
 /** 章节处理进度回调 */
@@ -299,9 +296,9 @@ export class DeepReader {
   private async generateContextAndChapters(
     content: string,
     title: string
-  ): Promise<{ context: string; chapters: Chapter[]; knowledgeGraph?: KnowledgeGraph }> {
+  ): Promise<{ context: string; chapters: Chapter[] }> {
     if (!this.config.enablePreview) {
-      return { context: '', chapters: [], knowledgeGraph: undefined };
+      return { context: '', chapters: [] };
     }
 
     console.log('[DeepReader] 生成全局上下文 + 智能章节划分...');
@@ -310,8 +307,8 @@ export class DeepReader {
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
-        purpose: '全面阅读文档，理解故事结构和人物关系。子 Agent 会自动识别章节边界和提取人物信息。',
-        outputFormat: '阅读完成后，直接调用 done() 结束任务即可。章节划分和人物关系由子 Agent 自动提取。',
+        purpose: '全面阅读文档，理解故事结构。子 Agent 会自动识别章节边界。',
+        outputFormat: '阅读完成后，直接调用 done() 结束任务即可。章节划分由子 Agent 自动提取。',
       },
       model: this.config.model,
       baseURL: this.config.baseURL,
@@ -356,127 +353,37 @@ export class DeepReader {
     });
     console.log('------------------------');
 
-    // 知识图谱由 RLM 子 Agent 增量收集
-    const knowledgeGraph = result.knowledgeGraph;
-    if (knowledgeGraph) {
-      console.log(`[DeepReader] 知识图谱: ${knowledgeGraph.characters.length} 人物, ${knowledgeGraph.relationships.length} 关系`);
-    }
-
-    // 基于知识图谱自动生成全局背景
-    const context = this.generateContextFromGraph(knowledgeGraph);
+    // 生成简单的全局背景（基于章节摘要）
+    const context = this.generateContextFromChapters(chapters, title);
     console.log(`[DeepReader] 全局背景: ${context.length} 字`);
-    console.log('------- 全局背景内容 -------');
-    console.log(context);
-    console.log('---------------------------');
 
-    return { context, chapters, knowledgeGraph };
+    return { context, chapters };
   }
 
   /**
-   * 从知识图谱生成全局背景描述（供精读改写使用）
+   * 从章节摘要生成全局背景描述（供精读改写使用）
    */
-  private generateContextFromGraph(graph?: KnowledgeGraph): string {
-    if (!graph || graph.characters.length === 0) {
+  private generateContextFromChapters(chapters: Chapter[], title: string): string {
+    if (chapters.length === 0) {
       return '（无全局背景信息）';
     }
 
     const lines: string[] = [];
-
-    // 主角
-    const protagonists = graph.characters
-      .filter(c => c.role === 'protagonist')
-      .map(c => `${c.name}${c.description ? `（${c.description}）` : ''}`);
-    if (protagonists.length > 0) {
-      lines.push(`主要人物：${protagonists.join('、')}`);
-    }
-
-    // 反派
-    const antagonists = graph.characters
-      .filter(c => c.role === 'antagonist')
-      .map(c => `${c.name}${c.description ? `（${c.description}）` : ''}`);
-    if (antagonists.length > 0) {
-      lines.push(`反派人物：${antagonists.join('、')}`);
-    }
-
-    // 重要配角（最多5个）
-    const supporting = graph.characters
-      .filter(c => c.role === 'supporting')
-      .slice(0, 5)
-      .map(c => c.name);
-    if (supporting.length > 0) {
-      lines.push(`重要配角：${supporting.join('、')}`);
-    }
-
-    // 关键关系（最多5条）
-    if (graph.relationships.length > 0) {
-      const keyRels = graph.relationships
-        .slice(0, 5)
-        .map(r => {
-          // 尝试找到人物名称
-          const fromChar = graph.characters.find(c => c.id === r.from);
-          const toChar = graph.characters.find(c => c.id === r.to);
-          const fromName = fromChar?.name || r.from;
-          const toName = toChar?.name || r.to;
-          return `${fromName}与${toName}：${r.type}`;
-        });
-      lines.push(`关键关系：${keyRels.join('；')}`);
+    lines.push(`本书《${title}》共 ${chapters.length} 章。`);
+    lines.push('');
+    lines.push('主要章节：');
+    
+    // 只列出前 10 章的摘要
+    const previewChapters = chapters.slice(0, 10);
+    previewChapters.forEach((ch, i) => {
+      lines.push(`${i + 1}. ${ch.title}${ch.summary ? `：${ch.summary}` : ''}`);
+    });
+    
+    if (chapters.length > 10) {
+      lines.push(`...（共 ${chapters.length} 章）`);
     }
 
     return lines.join('\n');
-  }
-
-  /**
-   * 从 RLM 输出中解析知识图谱 JSON
-   */
-  private parseKnowledgeGraph(rawOutput: string): KnowledgeGraph | undefined {
-    if (!rawOutput || rawOutput.trim().length === 0) {
-      return undefined;
-    }
-
-    try {
-      // 提取 JSON（可能被 ```json ``` 包裹）
-      let jsonStr = rawOutput;
-      const jsonMatch = rawOutput.match(/```json\s*([\s\S]*?)```/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[1].trim();
-      } else {
-        // 尝试找 { ... } 对象
-        const objMatch = rawOutput.match(/\{[\s\S]*\}/);
-        if (objMatch) {
-          jsonStr = objMatch[0];
-        } else {
-          console.warn('[DeepReader] 未找到知识图谱 JSON');
-          return undefined;
-        }
-      }
-
-      const graph = JSON.parse(jsonStr) as KnowledgeGraph;
-
-      // 验证基本结构
-      if (!graph.characters || !Array.isArray(graph.characters)) {
-        console.warn('[DeepReader] 知识图谱缺少 characters 数组');
-        return undefined;
-      }
-
-      // 确保每个 character 有 id
-      graph.characters = graph.characters.map((c, i) => ({
-        ...c,
-        id: c.id || `char_${i}`,
-        role: c.role || 'supporting',
-      }));
-
-      // 确保 relationships 和 events 存在
-      graph.relationships = graph.relationships || [];
-      graph.events = (graph.events || []).map((e, i) => ({
-        ...e,
-        id: e.id || `event_${i}`,
-      }));
-
-      return graph;
-    } catch (err) {
-      console.error('[DeepReader] 解析知识图谱失败:', err);
-      return undefined;
-    }
   }
 
   /**
@@ -778,8 +685,8 @@ ${input.writingHints}
 
     console.log(`[DeepReader] initSession: ${title} (${content.length.toLocaleString()} 字)`);
 
-    // RLM 速读：一次性生成全局上下文 + 智能章节划分 + 知识图谱
-    const { context, chapters, knowledgeGraph } = await this.generateContextAndChapters(content, title);
+    // RLM 速读：一次性生成全局上下文 + 智能章节划分
+    const { context, chapters } = await this.generateContextAndChapters(content, title);
     this.globalContext = context;
     this.chapters = chapters;
 
@@ -819,7 +726,6 @@ ${input.writingHints}
       timestamp,
       completedChapters: [],
       createdAt: Date.now(),
-      knowledgeGraph,
     };
   }
 
@@ -879,8 +785,8 @@ ${input.writingHints}
     console.log(`任务: ${this.config.task.purpose}`);
     console.log(`模型: ${this.config.model}`);
 
-    // 1. RLM 速读 + 智能章节划分 + 知识图谱
-    const { context, chapters, knowledgeGraph } = await this.generateContextAndChapters(input.content, input.title || '');
+    // 1. RLM 速读 + 智能章节划分
+    const { context, chapters } = await this.generateContextAndChapters(input.content, input.title || '');
     this.globalContext = context;
     this.chapters = chapters;
 
@@ -888,9 +794,6 @@ ${input.writingHints}
       throw new Error('RLM 章节划分失败');
     }
     console.log(`章节数: ${this.chapters.length}`);
-    if (knowledgeGraph) {
-      console.log(`知识图谱: ${knowledgeGraph.characters.length} 人物`);
-    }
 
     // 3. 准备输出文件
     const outputDir = path.join(process.cwd(), 'out', 'deep');
