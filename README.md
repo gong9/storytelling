@@ -17,45 +17,14 @@ OPENAI_BASE_URL=...
 MINIMAX_API_KEY=...      # TTS 语音合成
 ```
 
-## API
+## 使用流程
 
-### 评书改编 `POST /api/read`
-
-上传 PDF/TXT/MD 文件，AI 逐章精读改编为评书文本。
-
-```bash
-# 精读改编（默认）
-curl -X POST -F "file=@book.pdf" http://localhost:3100/api/read
-
-# 速读摘要
-curl -X POST -F "file=@book.pdf" -F "mode=skim" -F "task=summary" http://localhost:3100/api/read
-```
-
-| 参数 | 说明 |
-|------|------|
-| `file` | PDF / TXT / MD 文件 |
-| `mode` | `deep`（精读改编，默认） \| `skim`（速读摘要） |
-| `task` | `pingshu`（默认） \| `summary` \| `study-notes` |
-
-输出：`out/deep/` 目录下的 Markdown + TTS 清洗文本。
-
-### TTS 语音合成 `POST /api/tts`
-
-将改编后的评书文本按回目拆分，逐回生成 MP3 音频（MiniMax speech-2.8-hd）。
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"filePath":"out/deep/xxx_tts.txt","speed":1.3}' \
-  http://localhost:3100/api/tts
-```
-
-| 参数 | 说明 |
-|------|------|
-| `filePath` | 评书文本路径（md 文件会自动清洗） |
-| `voiceId` | 音色 ID（默认用复刻音色） |
-| `speed` | 语速，默认 1 |
-
-输出：`out/audio/` 目录下每回一个 MP3，SSE 流式返回进度。
+1. 打开 `http://localhost:3100`，拖拽上传 PDF / TXT / MD 文件
+2. 等待 AI 解析文档、生成全局上下文（实时日志可视）
+3. 点击「开始生成」，逐章改编为评书文本，支持随时暂停/继续
+4. 左侧章节列表点击已完成章节，右侧面板按回查看内容
+5. 每回可独立点击合成语音并在线播放（MiniMax audiobook_male_1 有声书音色）
+6. 关闭页面后，历史记录自动保留，下次可断点续生成
 
 ## 技术
 
@@ -66,7 +35,8 @@ curl -X POST -H "Content-Type: application/json" \
 ## 架构
 
 ```
-DeepReader（精读）── Commander Agent 规划 → Writer SubAgent 逐段生成
-RLMReader （速读）── 递归 Agent 自主决策阅读策略，支持并行子 Agent
-TTS        ── MiniMax speech-2.8-hd，自动按回目拆分 + 长文本分段合成
+前端         ── 左右双栏，章节时间线 + 阅读面板，暂停/继续/断点续生成
+DeepReader   ── Commander Agent 规划 → Writer SubAgent 逐段生成
+RLMReader    ── 递归 Agent 自主决策阅读策略，支持并行子 Agent
+TTS          ── MiniMax speech-2.8-hd，audiobook_male_1 有声书音色，单回合成+播放
 ```
