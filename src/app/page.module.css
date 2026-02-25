@@ -817,7 +817,7 @@
 /* ==================== 知识图谱面板 ==================== */
 
 .graphPanel {
-  width: 440px;
+  width: 580px;
   flex-shrink: 0;
   border-left: 1px solid #f0f0f0;
   background: #fff;
@@ -876,6 +876,55 @@
 .graphSvg {
   max-width: 100%;
   height: auto;
+}
+
+/* 缩放控制按钮 */
+.zoomControls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  padding: 4px 8px;
+  z-index: 10;
+}
+
+.zoomControls button {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  color: #555;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoomControls button:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.zoomLevel {
+  font-size: 11px;
+  color: #888;
+  min-width: 36px;
+  text-align: center;
+}
+
+.zoomReset {
+  margin-left: 4px;
+  border-left: 1px solid #e5e5e5 !important;
+  padding-left: 8px !important;
 }
 
 .graphNode {

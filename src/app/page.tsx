@@ -347,9 +347,14 @@ const ROLE_COLORS: Record<string, string> = {
 function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | null; isLoading?: boolean }) {
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [hoveredRel, setHoveredRel] = useState<number | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const lastPanPos = useRef({ x: 0, y: 0 });
 
-  const WIDTH = 420;
-  const HEIGHT = 380;
+  // 增大画布尺寸
+  const WIDTH = 560;
+  const HEIGHT = 480;
 
   const characters = graph?.characters || [];
   const relationships = graph?.relationships || [];
@@ -360,6 +365,41 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
     WIDTH,
     HEIGHT
   );
+
+  // 缩放处理（鼠标滚轮）
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setZoom(z => Math.max(0.5, Math.min(3, z * delta)));
+  }, []);
+
+  // 平移处理（按住空格或中键拖拽）
+  const handlePanStart = useCallback((e: React.MouseEvent) => {
+    if (e.button === 1 || e.altKey) { // 中键或 Alt 键
+      e.preventDefault();
+      setIsPanning(true);
+      lastPanPos.current = { x: e.clientX, y: e.clientY };
+    }
+  }, []);
+
+  const handlePanMove = useCallback((e: React.MouseEvent) => {
+    if (isPanning) {
+      const dx = e.clientX - lastPanPos.current.x;
+      const dy = e.clientY - lastPanPos.current.y;
+      setPan(p => ({ x: p.x + dx, y: p.y + dy }));
+      lastPanPos.current = { x: e.clientX, y: e.clientY };
+    }
+  }, [isPanning]);
+
+  const handlePanEnd = useCallback(() => {
+    setIsPanning(false);
+  }, []);
+
+  // 重置视图
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
 
   // 没有数据且不在加载：不显示
   if (!graph && !isLoading) {
@@ -394,15 +434,27 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
         </span>
       </div>
       <div className={styles.graphContainer}>
+        {/* 缩放控制按钮 */}
+        <div className={styles.zoomControls}>
+          <button onClick={() => setZoom(z => Math.min(3, z * 1.2))} title="放大">+</button>
+          <span className={styles.zoomLevel}>{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom(z => Math.max(0.5, z * 0.8))} title="缩小">−</button>
+          <button onClick={resetView} title="重置视图" className={styles.zoomReset}>⟲</button>
+        </div>
+        
         <svg
           width={WIDTH}
           height={HEIGHT}
           className={styles.graphSvg}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          style={{ cursor: dragging ? 'grabbing' : 'default' }}
+          onWheel={handleWheel}
+          onMouseDown={handlePanStart}
+          onMouseMove={(e) => { handlePanMove(e); handleMouseMove(e); }}
+          onMouseUp={(e) => { handlePanEnd(); handleMouseUp(); }}
+          onMouseLeave={() => { handlePanEnd(); handleMouseUp(); }}
+          style={{ cursor: isPanning ? 'move' : dragging ? 'grabbing' : 'default' }}
         >
+          {/* 缩放和平移变换组 */}
+          <g transform={`translate(${WIDTH/2 + pan.x}, ${HEIGHT/2 + pan.y}) scale(${zoom}) translate(${-WIDTH/2}, ${-HEIGHT/2})`}>
           {/* 关系连线 - MiroFish 风格曲线 */}
           {relationships.map((rel, i) => {
             const from = positions[rel.from];
@@ -505,6 +557,7 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
               </g>
             );
           })}
+          </g>
         </svg>
 
         {/* Tooltip - 右上角详情面板 */}
