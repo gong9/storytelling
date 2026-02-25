@@ -606,7 +606,7 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
                     transition: 'fill 0.15s',
                   }}
                 >
-                  {char.name.length > 4 ? char.name.slice(0, 4) + '…' : char.name}
+                  {(char.name || char.id || '').length > 4 ? (char.name || char.id || '').slice(0, 4) + '…' : (char.name || char.id || '')}
                 </text>
               </g>
             );
@@ -619,7 +619,7 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
           <div className={styles.graphTooltip}>
             {hoveredChar && (
               <>
-                <div className={styles.tooltipTitle}>{hoveredChar.name}</div>
+                <div className={styles.tooltipTitle}>{hoveredChar.name || hoveredChar.id}</div>
                 {hoveredChar.aliases && hoveredChar.aliases.length > 0 && (
                   <div className={styles.tooltipAlias}>又名: {hoveredChar.aliases.join('、')}</div>
                 )}
