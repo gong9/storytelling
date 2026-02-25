@@ -946,6 +946,22 @@
   border: none !important;
 }
 
+.fullscreenBtn {
+  margin-left: 4px;
+  border-left: 1px solid #eee !important;
+  padding-left: 8px !important;
+}
+
+/* 全屏模式 */
+.graphFullscreen {
+  background: #f8f9fa;
+}
+
+.graphFullscreen .graphSvg {
+  width: 100vw;
+  height: 100vh;
+}
+
 .graphNode {
   cursor: pointer;
 }

@@ -350,7 +350,33 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
   const [zoom, setZoom] = useState(0.85); // 默认稍微缩小，确保全部可见
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const lastPanPos = useRef({ x: 0, y: 0 });
+
+  // 全屏切换
+  const toggleFullscreen = useCallback(() => {
+    if (!containerRef.current) return;
+    
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+      }).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+      }).catch(() => {});
+    }
+  }, []);
+
+  // 监听全屏变化
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   // 画布尺寸 - 适配一屏展示
   const WIDTH = 1200;
@@ -433,13 +459,16 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
           {isLoading && <span className={styles.graphLoading}> · 构建中</span>}
         </span>
       </div>
-      <div className={styles.graphContainer}>
-        {/* 缩放控制按钮 */}
+      <div className={`${styles.graphContainer} ${isFullscreen ? styles.graphFullscreen : ''}`} ref={containerRef}>
+        {/* 控制按钮 */}
         <div className={styles.zoomControls}>
           <button onClick={() => setZoom(z => Math.min(3, z * 1.2))} title="放大">+</button>
           <span className={styles.zoomLevel}>{Math.round(zoom * 100)}%</span>
           <button onClick={() => setZoom(z => Math.max(0.5, z * 0.8))} title="缩小">−</button>
           <button onClick={resetView} title="重置视图" className={styles.zoomReset}>⟲</button>
+          <button onClick={toggleFullscreen} title={isFullscreen ? '退出全屏' : '全屏'} className={styles.fullscreenBtn}>
+            {isFullscreen ? '⤓' : '⤢'}
+          </button>
         </div>
         
         <svg
