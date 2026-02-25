@@ -309,8 +309,17 @@ export class DeepReader {
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
-        purpose: '全面阅读文档，根据内容语义智能划分章节。人物关系图谱由子 Agent 在阅读过程中增量提取，你只需专注于章节划分。',
+        purpose: '全面阅读文档，完成两项任务：1）提取全局背景信息（供后续章节改写参考）；2）根据内容语义智能划分章节。',
         outputFormat: `
+## 全局背景
+
+请简要概括（3-5 句话）：
+- 故事发生的时代、地点
+- 主要人物及其身份
+- 故事的核心情节线
+
+---
+
 ## 章节划分
 
 请根据内容语义将全文划分为若干章节。
@@ -335,8 +344,8 @@ export class DeepReader {
 - 章节数量根据文档长度灵活调整，通常 5-20 章
 
 ⚠️ 必须执行：
-1. 读完全部内容后，生成章节划分 JSON
-2. 调用 update_output(你的章节划分输出) 保存
+1. 读完全部内容后，先写全局背景，再写章节划分 JSON
+2. 调用 update_output(你的完整输出) 保存
 3. 调用 done() 结束任务
 `,
       },
@@ -348,14 +357,28 @@ export class DeepReader {
     const result = await reader.read({ content, title });
     const output = result.content || '';
 
-    // 主 Agent 现在只输出章节划分，人物关系图谱由子 Agent 增量提取
-    // 直接解析章节 JSON
-    const chapters = this.parseChapterPlan(output, content);
+    // 分离全局背景和章节划分
+    const chapterSectionIdx = output.indexOf('## 章节划分');
+    let contextText = '';
+    let chaptersJson = output;
+
+    if (chapterSectionIdx > -1) {
+      // 全局背景：从开头到章节划分之前
+      contextText = output.slice(0, chapterSectionIdx).trim();
+      // 去掉 "## 全局背景" 标题和分隔线
+      contextText = contextText.replace(/^##\s*全局背景\s*/i, '').replace(/^---+\s*/m, '').trim();
+      // 章节 JSON：从章节划分到结尾
+      chaptersJson = output.slice(chapterSectionIdx);
+    }
+
+    console.log(`[DeepReader] 全局背景: ${contextText.length} 字`);
+
+    // 解析章节 JSON
+    const chapters = this.parseChapterPlan(chaptersJson, content);
     console.log(`[DeepReader] 智能章节划分: ${chapters.length} 章`);
 
-    // 知识图谱不再从主 Agent 输出解析，而是从增量更新中获取
-    // 这里返回 undefined，由前端合并增量图谱数据
-    return { context: '', chapters, knowledgeGraph: undefined };
+    // 知识图谱由子 Agent 增量提取，这里返回 undefined
+    return { context: contextText, chapters, knowledgeGraph: undefined };
   }
 
   /**
