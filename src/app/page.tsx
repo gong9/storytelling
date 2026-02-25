@@ -41,6 +41,36 @@ interface LogEntry {
   type: 'info' | 'tool' | 'result' | 'stage';
 }
 
+// 知识图谱类型（与后端保持一致）
+interface KGCharacter {
+  id: string;
+  name: string;
+  aliases?: string[];
+  role: 'protagonist' | 'antagonist' | 'supporting';
+  description: string;
+}
+
+interface KGRelationship {
+  from: string;
+  to: string;
+  type: string;
+  description?: string;
+}
+
+interface KGEvent {
+  id: string;
+  name: string;
+  characters: string[];
+  chapter?: number;
+  description: string;
+}
+
+interface KnowledgeGraph {
+  characters: KGCharacter[];
+  relationships: KGRelationship[];
+  events: KGEvent[];
+}
+
 // ==================== SVG 图标 ====================
 
 function UploadIcon() {
@@ -146,6 +176,148 @@ function SpeakerIcon({ className }: { className?: string }) {
       <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
       <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
     </svg>
+  );
+}
+
+// ==================== 知识图谱面板 ====================
+
+function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | null; isLoading?: boolean }) {
+  if (isLoading) {
+    return (
+      <div className={styles.graphPanel}>
+        <div className={styles.graphHeader}>
+          <span className={styles.graphTitle}>人物关系图谱</span>
+          <span className={styles.graphLoading}>构建中...</span>
+        </div>
+        <div className={styles.graphPlaceholder}>
+          <div className={styles.spinner} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!graph || graph.characters.length === 0) {
+    return null;
+  }
+
+  const { characters, relationships } = graph;
+
+  // 简单的圆形布局
+  const centerX = 200;
+  const centerY = 180;
+  const radius = 120;
+
+  // 计算节点位置
+  const positions: Record<string, { x: number; y: number }> = {};
+  characters.forEach((char, i) => {
+    const angle = (2 * Math.PI * i) / characters.length - Math.PI / 2;
+    positions[char.id] = {
+      x: centerX + radius * Math.cos(angle),
+      y: centerY + radius * Math.sin(angle),
+    };
+  });
+
+  // 角色颜色
+  const roleColors: Record<string, string> = {
+    protagonist: '#D4AF37',
+    antagonist: '#dc2626',
+    supporting: '#6b7280',
+  };
+
+  return (
+    <div className={styles.graphPanel}>
+      <div className={styles.graphHeader}>
+        <span className={styles.graphTitle}>人物关系图谱</span>
+        <span className={styles.graphStats}>
+          {characters.length} 人物 · {relationships.length} 关系
+        </span>
+      </div>
+      <div className={styles.graphContainer}>
+        <svg width="400" height="360" className={styles.graphSvg}>
+          {/* 关系连线 */}
+          {relationships.map((rel, i) => {
+            const from = positions[rel.from];
+            const to = positions[rel.to];
+            if (!from || !to) return null;
+            
+            // 计算中点用于放置标签
+            const midX = (from.x + to.x) / 2;
+            const midY = (from.y + to.y) / 2;
+            
+            return (
+              <g key={i}>
+                <line
+                  x1={from.x}
+                  y1={from.y}
+                  x2={to.x}
+                  y2={to.y}
+                  stroke="#d1d5db"
+                  strokeWidth="1.5"
+                />
+                <text
+                  x={midX}
+                  y={midY - 5}
+                  className={styles.graphRelLabel}
+                  textAnchor="middle"
+                >
+                  {rel.type}
+                </text>
+              </g>
+            );
+          })}
+          
+          {/* 人物节点 */}
+          {characters.map((char) => {
+            const pos = positions[char.id];
+            if (!pos) return null;
+            
+            return (
+              <g key={char.id} className={styles.graphNode}>
+                <circle
+                  cx={pos.x}
+                  cy={pos.y}
+                  r="28"
+                  fill={roleColors[char.role] || roleColors.supporting}
+                  opacity="0.15"
+                />
+                <circle
+                  cx={pos.x}
+                  cy={pos.y}
+                  r="28"
+                  fill="none"
+                  stroke={roleColors[char.role] || roleColors.supporting}
+                  strokeWidth="2"
+                />
+                <text
+                  x={pos.x}
+                  y={pos.y + 5}
+                  className={styles.graphNodeLabel}
+                  textAnchor="middle"
+                >
+                  {char.name.length > 4 ? char.name.slice(0, 4) : char.name}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      
+      {/* 图例 */}
+      <div className={styles.graphLegend}>
+        <span className={styles.legendItem}>
+          <span className={styles.legendDot} style={{ background: '#D4AF37' }} />
+          主角
+        </span>
+        <span className={styles.legendItem}>
+          <span className={styles.legendDot} style={{ background: '#dc2626' }} />
+          反派
+        </span>
+        <span className={styles.legendItem}>
+          <span className={styles.legendDot} style={{ background: '#6b7280' }} />
+          配角
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -394,6 +566,9 @@ export default function Home() {
     }
   }, [liveContents, previewIndex, chapters]);
 
+  // 知识图谱
+  const [knowledgeGraph, setKnowledgeGraph] = useState<KnowledgeGraph | null>(null);
+
   // 实时日志
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [initStage, setInitStage] = useState('');
@@ -478,6 +653,12 @@ export default function Home() {
 
         if (type === 'error') {
           throw new Error(event.error as string);
+        }
+
+        if (type === 'knowledge_graph') {
+          const graphData = event.data as KnowledgeGraph;
+          setKnowledgeGraph(graphData);
+          addLog(`知识图谱: ${graphData.characters.length} 人物, ${graphData.relationships.length} 关系`, 'stage');
         }
 
         if (type === 'done') {
@@ -875,7 +1056,7 @@ export default function Home() {
         </>
       )}
 
-      {/* 初始化中（带实时日志） */}
+      {/* 初始化中（带实时日志 + 知识图谱） */}
       {status === 'uploading' && (
         <div className={styles.initPanel}>
           <div className={styles.initHeader}>
@@ -889,20 +1070,23 @@ export default function Home() {
               )}
             </div>
           </div>
-          <div className={styles.logPanel}>
-            {logs.map((log) => (
-              <div
-                key={log.id}
-                className={`${styles.logLine} ${
-                  log.type === 'tool' ? styles.logTool :
-                  log.type === 'result' ? styles.logResult :
-                  log.type === 'stage' ? styles.logStage : ''
-                }`}
-              >
-                {log.text}
-              </div>
-            ))}
-            <div ref={logEndRef} />
+          <div className={styles.initContent}>
+            <div className={styles.logPanel}>
+              {logs.map((log) => (
+                <div
+                  key={log.id}
+                  className={`${styles.logLine} ${
+                    log.type === 'tool' ? styles.logTool :
+                    log.type === 'result' ? styles.logResult :
+                    log.type === 'stage' ? styles.logStage : ''
+                  }`}
+                >
+                  {log.text}
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+            <KnowledgeGraphPanel graph={knowledgeGraph} isLoading={!knowledgeGraph && initToolCount > 5} />
           </div>
         </div>
       )}

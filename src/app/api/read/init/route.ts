@@ -119,6 +119,14 @@ export async function POST(request: NextRequest) {
         // 存储会话
         setSession(session);
 
+        // 推送知识图谱（在 done 之前）
+        if (session.knowledgeGraph) {
+          send({
+            type: 'knowledge_graph',
+            data: session.knowledgeGraph,
+          });
+        }
+
         // 最终结果
         send({
           type: 'done',

@@ -32,6 +32,7 @@ import type {
   DeepReadTaskConfig,
   DeepReaderOutput,
   DocumentInput,
+  KnowledgeGraph,
 } from './types';
 
 // ==================== TTS 文本清洗 ====================
@@ -173,6 +174,8 @@ export interface DeepReaderSession {
   createdAt: number;
   /** 每回 TTS 生成结果：key = "chapterIdx:episodeTitle", value = audioPath */
   ttsResults?: Record<string, string>;
+  /** 知识图谱（人物/关系/事件） */
+  knowledgeGraph?: KnowledgeGraph;
 }
 
 /** 章节处理进度回调 */
@@ -296,9 +299,9 @@ export class DeepReader {
   private async generateContextAndChapters(
     content: string,
     title: string
-  ): Promise<{ context: string; chapters: Chapter[] }> {
+  ): Promise<{ context: string; chapters: Chapter[]; knowledgeGraph?: KnowledgeGraph }> {
     if (!this.config.enablePreview) {
-      return { context: '', chapters: [] };
+      return { context: '', chapters: [], knowledgeGraph: undefined };
     }
 
     console.log('[DeepReader] 生成全局上下文 + 智能章节划分...');
@@ -306,16 +309,38 @@ export class DeepReader {
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
-        purpose: '全面阅读文档后，完成两项任务：1）提取核心背景信息；2）根据内容语义智能划分章节。',
+        purpose: '全面阅读文档后，完成三项任务：1）提取核心背景信息；2）构建人物关系图谱；3）根据内容语义智能划分章节。',
         outputFormat: `
 ## 时代背景
 （简述故事发生的时代、地点）
 
 ## 主要人物
-（列出 5-10 个主要人物，简述身份和关系）
+（列出 5-10 个主要人物，简述身份和关系，用于后续改编参考）
 
 ## 情节主线
 （简述故事主线，3-5 句话）
+
+## 人物关系图谱
+用 JSON 格式输出人物、关系、关键事件（必须是合法 JSON）：
+\`\`\`json
+{
+  "characters": [
+    {"id": "zhu_yuanzhang", "name": "朱元璋", "aliases": ["重八", "朱重八"], "role": "protagonist", "description": "布衣出身，后成明朝开国皇帝"},
+    {"id": "ma_xiuying", "name": "马皇后", "aliases": ["马秀英"], "role": "supporting", "description": "朱元璋发妻，贤德善良"}
+  ],
+  "relationships": [
+    {"from": "zhu_yuanzhang", "to": "ma_xiuying", "type": "夫妻", "description": "患难与共的发妻"}
+  ],
+  "events": [
+    {"id": "join_hongyin", "name": "投奔红巾军", "characters": ["zhu_yuanzhang"], "description": "朱元璋投军郭子兴麾下"}
+  ]
+}
+\`\`\`
+要求：
+- id 用英文小写+下划线，便于程序处理
+- role 只能是 protagonist（主角）、antagonist（反派）、supporting（配角）三种
+- 人物控制在 10-15 个，关系控制在 10-20 条，事件控制在 5-10 个
+- 只提取主要人物和关键事件，不要过于琐碎
 
 ## 章节划分
 请根据内容语义将全文划分为若干章节。要求：
@@ -343,23 +368,94 @@ export class DeepReader {
     const result = await reader.read({ content, title });
     const output = result.content || '';
 
-    // 分离全局上下文和章节划分
+    // 分离各个部分：全局上下文 | 人物关系图谱 | 章节划分
+    const graphSectionIdx = output.indexOf('## 人物关系图谱');
     const chapterSectionIdx = output.indexOf('## 章节划分');
+
     let contextText = output;
+    let graphJson = '';
     let chaptersJson = '';
 
-    if (chapterSectionIdx > -1) {
+    if (graphSectionIdx > -1 && chapterSectionIdx > -1) {
+      // 全局上下文：从开头到人物关系图谱之前
+      contextText = output.slice(0, graphSectionIdx).trim();
+      // 图谱 JSON：从人物关系图谱到章节划分之前
+      graphJson = output.slice(graphSectionIdx, chapterSectionIdx);
+      // 章节 JSON：从章节划分到结尾
+      chaptersJson = output.slice(chapterSectionIdx);
+    } else if (chapterSectionIdx > -1) {
+      // 没有图谱，只有章节划分
       contextText = output.slice(0, chapterSectionIdx).trim();
       chaptersJson = output.slice(chapterSectionIdx);
     }
 
     console.log(`[DeepReader] 全局上下文: ${contextText.length} 字`);
 
+    // 解析知识图谱 JSON
+    const knowledgeGraph = this.parseKnowledgeGraph(graphJson);
+    if (knowledgeGraph) {
+      console.log(`[DeepReader] 知识图谱: ${knowledgeGraph.characters.length} 人物, ${knowledgeGraph.relationships.length} 关系, ${knowledgeGraph.events.length} 事件`);
+    }
+
     // 解析章节 JSON
     const chapters = this.parseChapterPlan(chaptersJson, content);
     console.log(`[DeepReader] 智能章节划分: ${chapters.length} 章`);
 
-    return { context: contextText, chapters };
+    return { context: contextText, chapters, knowledgeGraph };
+  }
+
+  /**
+   * 从 RLM 输出中解析知识图谱 JSON
+   */
+  private parseKnowledgeGraph(rawOutput: string): KnowledgeGraph | undefined {
+    if (!rawOutput || rawOutput.trim().length === 0) {
+      return undefined;
+    }
+
+    try {
+      // 提取 JSON（可能被 ```json ``` 包裹）
+      let jsonStr = rawOutput;
+      const jsonMatch = rawOutput.match(/```json\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1].trim();
+      } else {
+        // 尝试找 { ... } 对象
+        const objMatch = rawOutput.match(/\{[\s\S]*\}/);
+        if (objMatch) {
+          jsonStr = objMatch[0];
+        } else {
+          console.warn('[DeepReader] 未找到知识图谱 JSON');
+          return undefined;
+        }
+      }
+
+      const graph = JSON.parse(jsonStr) as KnowledgeGraph;
+
+      // 验证基本结构
+      if (!graph.characters || !Array.isArray(graph.characters)) {
+        console.warn('[DeepReader] 知识图谱缺少 characters 数组');
+        return undefined;
+      }
+
+      // 确保每个 character 有 id
+      graph.characters = graph.characters.map((c, i) => ({
+        ...c,
+        id: c.id || `char_${i}`,
+        role: c.role || 'supporting',
+      }));
+
+      // 确保 relationships 和 events 存在
+      graph.relationships = graph.relationships || [];
+      graph.events = (graph.events || []).map((e, i) => ({
+        ...e,
+        id: e.id || `event_${i}`,
+      }));
+
+      return graph;
+    } catch (err) {
+      console.error('[DeepReader] 解析知识图谱失败:', err);
+      return undefined;
+    }
   }
 
   /**
@@ -661,8 +757,8 @@ ${input.writingHints}
 
     console.log(`[DeepReader] initSession: ${title} (${content.length.toLocaleString()} 字)`);
 
-    // RLM 速读：一次性生成全局上下文 + 智能章节划分
-    const { context, chapters } = await this.generateContextAndChapters(content, title);
+    // RLM 速读：一次性生成全局上下文 + 智能章节划分 + 知识图谱
+    const { context, chapters, knowledgeGraph } = await this.generateContextAndChapters(content, title);
     this.globalContext = context;
     this.chapters = chapters;
 
@@ -702,6 +798,7 @@ ${input.writingHints}
       timestamp,
       completedChapters: [],
       createdAt: Date.now(),
+      knowledgeGraph,
     };
   }
 
@@ -761,8 +858,8 @@ ${input.writingHints}
     console.log(`任务: ${this.config.task.purpose}`);
     console.log(`模型: ${this.config.model}`);
 
-    // 1. RLM 速读 + 智能章节划分
-    const { context, chapters } = await this.generateContextAndChapters(input.content, input.title || '');
+    // 1. RLM 速读 + 智能章节划分 + 知识图谱
+    const { context, chapters, knowledgeGraph } = await this.generateContextAndChapters(input.content, input.title || '');
     this.globalContext = context;
     this.chapters = chapters;
 
@@ -770,6 +867,9 @@ ${input.writingHints}
       throw new Error('RLM 章节划分失败');
     }
     console.log(`章节数: ${this.chapters.length}`);
+    if (knowledgeGraph) {
+      console.log(`知识图谱: ${knowledgeGraph.characters.length} 人物`);
+    }
 
     // 3. 准备输出文件
     const outputDir = path.join(process.cwd(), 'out', 'deep');
