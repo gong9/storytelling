@@ -20,7 +20,6 @@ import path from 'path';
 import { cleanForTTS } from '@/lib/deep-reader';
 
 const MINIMAX_API_BASE = 'https://api.minimaxi.com';
-const CLONED_VOICE_CONFIG_PATH = path.join(process.cwd(), 'cloned-voice-config.json');
 
 // ==================== 辅助函数 ====================
 
@@ -31,14 +30,7 @@ function getApiKey(): string {
 }
 
 function getActiveVoiceId(): string {
-  try {
-    if (fs.existsSync(CLONED_VOICE_CONFIG_PATH)) {
-      const content = fs.readFileSync(CLONED_VOICE_CONFIG_PATH, 'utf-8');
-      const config = JSON.parse(content);
-      if (config.voiceId) return config.voiceId;
-    }
-  } catch {}
-  return 'male-qn-qingse';
+  return 'audiobook_male_1';
 }
 
 /**
