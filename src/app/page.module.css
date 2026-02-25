@@ -859,6 +859,7 @@
 }
 
 .graphContainer {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;
@@ -915,6 +916,44 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
+}
+
+.legendHint {
+  font-size: 10px;
+  color: #d4d4d4;
+  margin-left: auto;
+}
+
+/* Tooltip */
+.graphTooltip {
+  position: absolute;
+  bottom: 60px;
+  left: 16px;
+  right: 16px;
+  background: rgba(23, 23, 23, 0.92);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.tooltipTitle {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.tooltipAlias {
+  color: #a3a3a3;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.tooltipDesc {
+  color: #d4d4d4;
 }
 
 /* ==================== 响应式 ==================== */

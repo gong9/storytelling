@@ -179,9 +179,155 @@ function SpeakerIcon({ className }: { className?: string }) {
   );
 }
 
-// ==================== 知识图谱面板 ====================
+// ==================== 知识图谱面板（力导向布局 + 拖拽） ====================
+
+// 简单的力导向布局 hook
+function useForceLayout(
+  characters: KGCharacter[],
+  relationships: KGRelationship[],
+  width: number,
+  height: number
+) {
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [dragging, setDragging] = useState<string | null>(null);
+  const dragOffset = useRef({ x: 0, y: 0 });
+
+  // 初始化或更新节点位置
+  useEffect(() => {
+    if (characters.length === 0) return;
+
+    setPositions((prev) => {
+      const next: Record<string, { x: number; y: number }> = {};
+      const existing = Object.keys(prev);
+
+      characters.forEach((char, i) => {
+        if (prev[char.id]) {
+          // 保留已有位置
+          next[char.id] = prev[char.id];
+        } else {
+          // 新节点：随机分布或按角度分布
+          const angle = (2 * Math.PI * i) / characters.length - Math.PI / 2;
+          const radius = Math.min(width, height) * 0.35;
+          next[char.id] = {
+            x: width / 2 + radius * Math.cos(angle) + (Math.random() - 0.5) * 40,
+            y: height / 2 + radius * Math.sin(angle) + (Math.random() - 0.5) * 40,
+          };
+        }
+      });
+
+      // 只有新增节点时才触发力模拟
+      if (existing.length < characters.length) {
+        return runForceSimulation(next, relationships, width, height, 50);
+      }
+      return next;
+    });
+  }, [characters.length, relationships.length, width, height]);
+
+  // 简单的力模拟（斥力 + 引力）
+  function runForceSimulation(
+    pos: Record<string, { x: number; y: number }>,
+    rels: KGRelationship[],
+    w: number,
+    h: number,
+    iterations: number
+  ) {
+    const nodes = Object.keys(pos).map((id) => ({ id, ...pos[id] }));
+    const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+
+    for (let iter = 0; iter < iterations; iter++) {
+      // 斥力（节点间互斥）
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const minDist = 70;
+          if (dist < minDist) {
+            const force = (minDist - dist) / dist * 0.5;
+            const fx = dx * force, fy = dy * force;
+            a.x -= fx; a.y -= fy;
+            b.x += fx; b.y += fy;
+          }
+        }
+      }
+
+      // 引力（有关系的节点相吸）
+      for (const rel of rels) {
+        const a = nodeMap.get(rel.from), b = nodeMap.get(rel.to);
+        if (!a || !b) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const idealDist = 100;
+        if (dist > idealDist) {
+          const force = (dist - idealDist) / dist * 0.1;
+          const fx = dx * force, fy = dy * force;
+          a.x += fx; a.y += fy;
+          b.x -= fx; b.y -= fy;
+        }
+      }
+
+      // 边界约束
+      const padding = 35;
+      for (const n of nodes) {
+        n.x = Math.max(padding, Math.min(w - padding, n.x));
+        n.y = Math.max(padding, Math.min(h - padding, n.y));
+      }
+    }
+
+    const result: Record<string, { x: number; y: number }> = {};
+    for (const n of nodes) result[n.id] = { x: n.x, y: n.y };
+    return result;
+  }
+
+  // 拖拽处理
+  const handleMouseDown = (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    setDragging(id);
+    const pos = positions[id];
+    if (pos) {
+      dragOffset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!dragging) return;
+    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setPositions((prev) => ({
+      ...prev,
+      [dragging]: { x: Math.max(35, Math.min(width - 35, x)), y: Math.max(35, Math.min(height - 35, y)) },
+    }));
+  };
+
+  const handleMouseUp = () => setDragging(null);
+
+  return { positions, dragging, handleMouseDown, handleMouseMove, handleMouseUp };
+}
+
+const ROLE_COLORS: Record<string, string> = {
+  protagonist: '#D4AF37',
+  antagonist: '#dc2626',
+  supporting: '#6b7280',
+};
 
 function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | null; isLoading?: boolean }) {
+  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const [hoveredRel, setHoveredRel] = useState<number | null>(null);
+
+  const WIDTH = 420;
+  const HEIGHT = 380;
+
+  const characters = graph?.characters || [];
+  const relationships = graph?.relationships || [];
+
+  const { positions, dragging, handleMouseDown, handleMouseMove, handleMouseUp } = useForceLayout(
+    characters,
+    relationships,
+    WIDTH,
+    HEIGHT
+  );
+
   // 没有数据且不在加载：不显示
   if (!graph && !isLoading) {
     return null;
@@ -202,29 +348,8 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
     );
   }
 
-  const { characters, relationships } = graph;
-
-  // 简单的圆形布局
-  const centerX = 200;
-  const centerY = 180;
-  const radius = 120;
-
-  // 计算节点位置
-  const positions: Record<string, { x: number; y: number }> = {};
-  characters.forEach((char, i) => {
-    const angle = (2 * Math.PI * i) / characters.length - Math.PI / 2;
-    positions[char.id] = {
-      x: centerX + radius * Math.cos(angle),
-      y: centerY + radius * Math.sin(angle),
-    };
-  });
-
-  // 角色颜色
-  const roleColors: Record<string, string> = {
-    protagonist: '#D4AF37',
-    antagonist: '#dc2626',
-    supporting: '#6b7280',
-  };
+  const hoveredChar = hoveredNode ? characters.find((c) => c.id === hoveredNode) : null;
+  const hoveredRelData = hoveredRel !== null ? relationships[hoveredRel] : null;
 
   return (
     <div className={styles.graphPanel}>
@@ -236,36 +361,36 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
         </span>
       </div>
       <div className={styles.graphContainer}>
-        <svg width="400" height="360" className={styles.graphSvg}>
+        <svg
+          width={WIDTH}
+          height={HEIGHT}
+          className={styles.graphSvg}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          style={{ cursor: dragging ? 'grabbing' : 'default' }}
+        >
           {/* 关系连线 */}
           {relationships.map((rel, i) => {
             const from = positions[rel.from];
             const to = positions[rel.to];
             if (!from || !to) return null;
-            
-            // 计算中点用于放置标签
-            const midX = (from.x + to.x) / 2;
-            const midY = (from.y + to.y) / 2;
+
+            const isHovered = hoveredRel === i || hoveredNode === rel.from || hoveredNode === rel.to;
             
             return (
-              <g key={i}>
-                <line
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
-                  stroke="#d1d5db"
-                  strokeWidth="1.5"
-                />
-                <text
-                  x={midX}
-                  y={midY - 5}
-                  className={styles.graphRelLabel}
-                  textAnchor="middle"
-                >
-                  {rel.type}
-                </text>
-              </g>
+              <line
+                key={i}
+                x1={from.x}
+                y1={from.y}
+                x2={to.x}
+                y2={to.y}
+                stroke={isHovered ? '#737373' : '#e5e5e5'}
+                strokeWidth={isHovered ? 2 : 1}
+                style={{ transition: 'stroke 0.2s, stroke-width 0.2s' }}
+                onMouseEnter={() => setHoveredRel(i)}
+                onMouseLeave={() => setHoveredRel(null)}
+              />
             );
           })}
           
@@ -273,36 +398,79 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
           {characters.map((char) => {
             const pos = positions[char.id];
             if (!pos) return null;
+
+            const color = ROLE_COLORS[char.role] || ROLE_COLORS.supporting;
+            const isHovered = hoveredNode === char.id;
+            const isDragging = dragging === char.id;
+            const nodeRadius = isHovered || isDragging ? 32 : 28;
             
             return (
-              <g key={char.id} className={styles.graphNode}>
+              <g
+                key={char.id}
+                className={styles.graphNode}
+                onMouseDown={(e) => handleMouseDown(char.id, e)}
+                onMouseEnter={() => setHoveredNode(char.id)}
+                onMouseLeave={() => setHoveredNode(null)}
+                style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+              >
                 <circle
                   cx={pos.x}
                   cy={pos.y}
-                  r="28"
-                  fill={roleColors[char.role] || roleColors.supporting}
-                  opacity="0.15"
+                  r={nodeRadius}
+                  fill={color}
+                  opacity={isHovered || isDragging ? 0.25 : 0.12}
+                  style={{ transition: 'r 0.15s, opacity 0.15s' }}
                 />
                 <circle
                   cx={pos.x}
                   cy={pos.y}
-                  r="28"
+                  r={nodeRadius}
                   fill="none"
-                  stroke={roleColors[char.role] || roleColors.supporting}
-                  strokeWidth="2"
+                  stroke={color}
+                  strokeWidth={isHovered || isDragging ? 2.5 : 1.5}
+                  style={{ transition: 'r 0.15s, stroke-width 0.15s' }}
                 />
                 <text
                   x={pos.x}
                   y={pos.y + 5}
                   className={styles.graphNodeLabel}
                   textAnchor="middle"
+                  style={{ pointerEvents: 'none' }}
                 >
-                  {char.name.length > 4 ? char.name.slice(0, 4) : char.name}
+                  {char.name.length > 3 ? char.name.slice(0, 3) : char.name}
                 </text>
               </g>
             );
           })}
         </svg>
+
+        {/* Tooltip */}
+        {(hoveredChar || hoveredRelData) && (
+          <div className={styles.graphTooltip}>
+            {hoveredChar && (
+              <>
+                <div className={styles.tooltipTitle}>{hoveredChar.name}</div>
+                {hoveredChar.aliases && hoveredChar.aliases.length > 0 && (
+                  <div className={styles.tooltipAlias}>又名: {hoveredChar.aliases.join('、')}</div>
+                )}
+                <div className={styles.tooltipDesc}>{hoveredChar.description}</div>
+              </>
+            )}
+            {hoveredRelData && !hoveredChar && (
+              <>
+                <div className={styles.tooltipTitle}>
+                  {characters.find((c) => c.id === hoveredRelData.from)?.name || hoveredRelData.from}
+                  {' → '}
+                  {characters.find((c) => c.id === hoveredRelData.to)?.name || hoveredRelData.to}
+                </div>
+                <div className={styles.tooltipDesc}>关系: {hoveredRelData.type}</div>
+                {hoveredRelData.description && (
+                  <div className={styles.tooltipDesc}>{hoveredRelData.description}</div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
       
       {/* 图例 */}
@@ -319,6 +487,7 @@ function KnowledgeGraphPanel({ graph, isLoading }: { graph: KnowledgeGraph | nul
           <span className={styles.legendDot} style={{ background: '#6b7280' }} />
           配角
         </span>
+        <span className={styles.legendHint}>可拖拽调整</span>
       </div>
     </div>
   );
