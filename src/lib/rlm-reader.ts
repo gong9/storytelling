@@ -20,6 +20,7 @@ import {
   buildInitMessage,
   buildSubReaderPrompt,
   buildGraphMergerPrompt,
+  buildChapterMergerPrompt,
   formatChunkContent,
   RLM_MESSAGES,
   TASK_STUDY_NOTES,
@@ -651,6 +652,86 @@ export class RLMReader {
   }
 
   /**
+   * 使用 LLM 整合碎片化的章节信息
+   * - 去除重复章节
+   * - 合并块范围
+   * - 消除重叠
+   * - 按顺序排列
+   */
+  async mergeChaptersWithLLM(
+    rawChapters: Array<{ chunkStart: number; chunkEnd: number; title: string; summary: string }>,
+    totalChunks: number,
+    title: string
+  ): Promise<Array<{ chunkStart: number; chunkEnd: number; title: string; summary: string }>> {
+    // 如果章节太少，不需要整合
+    if (rawChapters.length <= 10) {
+      console.log('[RLM] 章节数量合理，跳过 LLM 整合');
+      return rawChapters;
+    }
+
+    console.log(`[RLM] 开始整合章节: ${rawChapters.length} 个原始片段...`);
+    const startTime = Date.now();
+
+    try {
+      const llm = this.createLLM(this.config.subAgentModel);
+      
+      // 格式化原始章节数据
+      const rawChaptersStr = rawChapters.map((ch, i) => 
+        `${i + 1}. "${ch.title}" (块 ${ch.chunkStart}-${ch.chunkEnd}): ${ch.summary}`
+      ).join('\n');
+
+      // 构建整合提示词
+      const prompt = buildChapterMergerPrompt(rawChaptersStr, totalChunks, title);
+
+      // 单次 LLM 调用
+      const response = await llm.invoke([
+        { role: 'user', content: prompt }
+      ]);
+
+      const content = typeof response.content === 'string' 
+        ? response.content 
+        : JSON.stringify(response.content);
+
+      // 解析返回的 JSON
+      const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn('[RLM] 章节整合返回格式错误，使用基础合并');
+        return rawChapters;
+      }
+
+      const jsonStr = jsonMatch[1] || jsonMatch[0];
+      const merged = JSON.parse(jsonStr) as {
+        chapters: Array<{
+          title: string;
+          startChunk: number;
+          endChunk: number;
+          summary: string;
+        }>;
+      };
+
+      // 验证基本结构
+      if (!Array.isArray(merged.chapters) || merged.chapters.length === 0) {
+        console.warn('[RLM] 章节整合结果无效，使用基础合并');
+        return rawChapters;
+      }
+
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[RLM] 章节整合完成: ${rawChapters.length} → ${merged.chapters.length} 章 (${duration}s)`);
+
+      // 转换为内部格式
+      return merged.chapters.map(ch => ({
+        chunkStart: ch.startChunk,
+        chunkEnd: ch.endChunk,
+        title: ch.title,
+        summary: ch.summary || '',
+      }));
+    } catch (error) {
+      console.error('[RLM] 章节整合失败:', error instanceof Error ? error.message : error);
+      return rawChapters;
+    }
+  }
+
+  /**
    * 更新输出
    */
   private updateOutput(content: string): string {
@@ -831,18 +912,23 @@ export class RLMReader {
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       const rawGraph = this.getCollectedGraph();
-      const chapters = this.getCollectedChapters();
+      const rawChapters = this.getCollectedChapters();
       
       console.log('');
       console.log('========== RLM 阅读完成 ==========');
       console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒`);
       console.log(`原始图谱: ${rawGraph.characters.length} 人物, ${rawGraph.relationships.length} 关系`);
-      console.log(`章节片段: ${this.collectedChapterSegments.length} 个 → 合并后 ${chapters.length} 章`);
+      console.log(`章节片段: ${this.collectedChapterSegments.length} 个 → 基础合并 ${rawChapters.length} 章`);
       
       // 使用 LLM 整合图谱（合并别名、去重、评估重要性）
       const mergedGraph = rawGraph.characters.length > 0 
         ? await this.mergeKnowledgeGraph(rawGraph)
         : undefined;
+      
+      // 使用 LLM 整合章节（去重、合并块范围、消除重叠）
+      const chapters = rawChapters.length > 10
+        ? await this.mergeChaptersWithLLM(rawChapters, this.chunks.length, input.title || '')
+        : rawChapters;
       
       console.log('');
       
@@ -867,18 +953,23 @@ export class RLMReader {
       // 如果是递归限制错误，返回当前已有的输出
       if (errorMessage.includes('GRAPH_RECURSION_LIMIT') || errorMessage.includes('Recursion limit')) {
         const rawGraph = this.getCollectedGraph();
-        const chapters = this.getCollectedChapters();
+        const rawChapters = this.getCollectedChapters();
         console.log('');
         console.log('========== RLM 达到递归限制 ==========');
         console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒`);
         console.log(`原始图谱: ${rawGraph.characters.length} 人物, ${rawGraph.relationships.length} 关系`);
-        console.log(`章节片段: ${this.collectedChapterSegments.length} 个 → 合并后 ${chapters.length} 章`);
+        console.log(`章节片段: ${this.collectedChapterSegments.length} 个 → 基础合并 ${rawChapters.length} 章`);
         console.log('提示: 已达到最大循环次数，返回当前结果');
         
         // 使用 LLM 整合图谱
         const mergedGraph = rawGraph.characters.length > 0 
           ? await this.mergeKnowledgeGraph(rawGraph)
           : undefined;
+        
+        // 使用 LLM 整合章节
+        const chapters = rawChapters.length > 10
+          ? await this.mergeChaptersWithLLM(rawChapters, this.chunks.length, '')
+          : rawChapters;
         
         console.log('');
         
