@@ -657,16 +657,16 @@
 
 .initContent {
   display: grid;
-  grid-template-columns: 1fr 1.4fr;
+  grid-template-columns: minmax(320px, 400px) 1fr;
   gap: 1px;
   background: #e5e5e5;
-  min-height: 560px;
+  min-height: 700px;
   border-radius: 0 0 12px 12px;
   overflow: hidden;
 }
 
 .logPanel {
-  max-height: 560px;
+  max-height: 700px;
   overflow-y: auto;
   padding: 16px 20px;
   background: #fff;
@@ -882,7 +882,7 @@
   justify-content: stretch;
   padding: 0;
   overflow: hidden;
-  min-height: 480px;
+  min-height: 600px;
   /* MiroFish 风格点阵背景 */
   background-color: #fafafa;
   background-image: 
