@@ -44,6 +44,9 @@ import type {
   RLMReaderConfig,
   RLMTaskConfig,
   RLMState,
+  KnowledgeGraph,
+  Character,
+  Relationship,
 } from './types';
 
 // ==================== SQLite Checkpointer ====================
@@ -99,6 +102,10 @@ export class RLMReader {
   private toolCallCount: number = 0;
   private readChunksSet: Set<number> = new Set();
   private documentId: string = '';
+  
+  // 增量收集的知识图谱数据
+  private collectedCharacters: Map<string, Character> = new Map();
+  private collectedRelationships: Relationship[] = [];
 
   constructor(config: RLMReaderConfig = {}) {
     this.config = {
@@ -362,7 +369,7 @@ export class RLMReader {
   }
 
   /**
-   * 解析子 Agent 返回中的人物/关系数据，并通过特殊日志格式输出
+   * 解析子 Agent 返回中的人物/关系数据，保存到收集器并输出日志
    */
   private parseAndLogGraphUpdate(answer: string): void {
     try {
@@ -371,12 +378,12 @@ export class RLMReader {
       // 提取 ```relationships [...] ```
       const relsMatch = answer.match(/```relationships\s*([\s\S]*?)```/);
 
-      let characters: unknown[] = [];
-      let relationships: unknown[] = [];
+      let characters: Character[] = [];
+      let relationships: Relationship[] = [];
 
       if (charsMatch) {
         try {
-          characters = JSON.parse(charsMatch[1].trim());
+          characters = JSON.parse(charsMatch[1].trim()) as Character[];
         } catch {
           // 解析失败，忽略
         }
@@ -384,21 +391,76 @@ export class RLMReader {
 
       if (relsMatch) {
         try {
-          relationships = JSON.parse(relsMatch[1].trim());
+          relationships = JSON.parse(relsMatch[1].trim()) as Relationship[];
         } catch {
           // 解析失败，忽略
         }
       }
 
-      // 只有有数据时才输出特殊日志（会被 init API 捕获）
+      // 收集人物（按 id 去重，后来的覆盖先来的）
+      if (Array.isArray(characters)) {
+        for (const char of characters) {
+          if (char && char.id && char.name) {
+            this.collectedCharacters.set(char.id, {
+              id: char.id,
+              name: char.name,
+              aliases: char.aliases || [],
+              role: char.role || 'supporting',
+              description: char.description || '',
+            });
+          }
+        }
+      }
+
+      // 收集关系（允许重复，后续可去重）
+      if (Array.isArray(relationships)) {
+        for (const rel of relationships) {
+          if (rel && rel.from && rel.to && rel.type) {
+            this.collectedRelationships.push({
+              from: rel.from,
+              to: rel.to,
+              type: rel.type,
+              description: rel.description || '',
+            });
+          }
+        }
+      }
+
+      // 输出日志供前端实时展示
       if ((Array.isArray(characters) && characters.length > 0) || 
           (Array.isArray(relationships) && relationships.length > 0)) {
-        // 使用特殊前缀，便于 init API 识别
         console.log(`[GRAPH_UPDATE] ${JSON.stringify({ characters, relationships })}`);
       }
     } catch {
       // 解析失败，静默忽略
     }
+  }
+
+  /**
+   * 获取收集的知识图谱
+   */
+  getCollectedGraph(): KnowledgeGraph {
+    return {
+      characters: Array.from(this.collectedCharacters.values()),
+      relationships: this.dedupeRelationships(this.collectedRelationships),
+      events: [], // 事件暂时不收集
+    };
+  }
+
+  /**
+   * 关系去重（相同 from/to/type 只保留一个）
+   */
+  private dedupeRelationships(rels: Relationship[]): Relationship[] {
+    const seen = new Set<string>();
+    const result: Relationship[] = [];
+    for (const rel of rels) {
+      const key = `${rel.from}|${rel.to}|${rel.type}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(rel);
+      }
+    }
+    return result;
   }
 
   /**
@@ -436,6 +498,10 @@ export class RLMReader {
     const startTime = Date.now();
     this.toolCallCount = 0;
     this.readChunksSet.clear();
+    
+    // 清空图谱收集器
+    this.collectedCharacters.clear();
+    this.collectedRelationships = [];
     
     // 生成文档唯一标识和 thread_id
     this.documentId = this.generateDocumentId(input.content);
@@ -576,9 +642,11 @@ export class RLMReader {
       );
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      const collectedGraph = this.getCollectedGraph();
       console.log('');
       console.log('========== RLM 阅读完成 ==========');
       console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒, 输出 ${(this.output || '').length.toLocaleString()} 字`);
+      console.log(`图谱: ${collectedGraph.characters.length} 人物, ${collectedGraph.relationships.length} 关系`);
       console.log('');
       
       return {
@@ -587,6 +655,7 @@ export class RLMReader {
           totalChunks: this.chunks.length,
           task: this.config.task.purpose,
         },
+        knowledgeGraph: collectedGraph.characters.length > 0 ? collectedGraph : undefined,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -599,9 +668,11 @@ export class RLMReader {
       
       // 如果是递归限制错误，返回当前已有的输出
       if (errorMessage.includes('GRAPH_RECURSION_LIMIT') || errorMessage.includes('Recursion limit')) {
+        const collectedGraph = this.getCollectedGraph();
         console.log('');
         console.log('========== RLM 达到递归限制 ==========');
         console.log(`统计: ${this.toolCallCount} 次工具调用, 耗时 ${duration} 秒, 当前输出 ${(this.output || '').length.toLocaleString()} 字`);
+        console.log(`图谱: ${collectedGraph.characters.length} 人物, ${collectedGraph.relationships.length} 关系`);
         console.log('提示: 已达到最大循环次数，返回当前结果');
         console.log('');
         
@@ -612,6 +683,7 @@ export class RLMReader {
             task: this.config.task.purpose,
             warning: '达到递归限制，结果可能不完整',
           },
+          knowledgeGraph: collectedGraph.characters.length > 0 ? collectedGraph : undefined,
         };
       }
       

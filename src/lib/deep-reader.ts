@@ -309,19 +309,8 @@ export class DeepReader {
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
-        purpose: '全面阅读文档，完成两项任务：1）提取全局背景信息（供后续章节改写参考）；2）根据内容语义智能划分章节。',
+        purpose: '全面阅读文档，根据内容语义智能划分章节。',
         outputFormat: `
-## 全局背景
-
-请简要概括（3-5 句话）：
-- 故事发生的时代、地点
-- 主要人物及其身份
-- 故事的核心情节线
-
----
-
-## 章节划分
-
 请根据内容语义将全文划分为若干章节。
 
 要求：
@@ -344,8 +333,8 @@ export class DeepReader {
 - 章节数量根据文档长度灵活调整，通常 5-20 章
 
 ⚠️ 必须执行：
-1. 读完全部内容后，先写全局背景，再写章节划分 JSON
-2. 调用 update_output(你的完整输出) 保存
+1. 读完全部内容后，生成章节划分 JSON
+2. 调用 update_output(章节划分JSON) 保存
 3. 调用 done() 结束任务
 `,
       },
@@ -357,28 +346,74 @@ export class DeepReader {
     const result = await reader.read({ content, title });
     const output = result.content || '';
 
-    // 分离全局背景和章节划分
-    const chapterSectionIdx = output.indexOf('## 章节划分');
-    let contextText = '';
-    let chaptersJson = output;
-
-    if (chapterSectionIdx > -1) {
-      // 全局背景：从开头到章节划分之前
-      contextText = output.slice(0, chapterSectionIdx).trim();
-      // 去掉 "## 全局背景" 标题和分隔线
-      contextText = contextText.replace(/^##\s*全局背景\s*/i, '').replace(/^---+\s*/m, '').trim();
-      // 章节 JSON：从章节划分到结尾
-      chaptersJson = output.slice(chapterSectionIdx);
-    }
-
-    console.log(`[DeepReader] 全局背景: ${contextText.length} 字`);
-
-    // 解析章节 JSON
-    const chapters = this.parseChapterPlan(chaptersJson, content);
+    // 主 Agent 只输出章节划分 JSON，直接解析
+    const chapters = this.parseChapterPlan(output, content);
     console.log(`[DeepReader] 智能章节划分: ${chapters.length} 章`);
 
-    // 知识图谱由子 Agent 增量提取，这里返回 undefined
-    return { context: contextText, chapters, knowledgeGraph: undefined };
+    // 知识图谱由 RLM 子 Agent 增量收集
+    const knowledgeGraph = result.knowledgeGraph;
+    if (knowledgeGraph) {
+      console.log(`[DeepReader] 知识图谱: ${knowledgeGraph.characters.length} 人物, ${knowledgeGraph.relationships.length} 关系`);
+    }
+
+    // 基于知识图谱自动生成全局背景
+    const context = this.generateContextFromGraph(knowledgeGraph);
+    console.log(`[DeepReader] 全局背景: ${context.length} 字`);
+
+    return { context, chapters, knowledgeGraph };
+  }
+
+  /**
+   * 从知识图谱生成全局背景描述（供精读改写使用）
+   */
+  private generateContextFromGraph(graph?: KnowledgeGraph): string {
+    if (!graph || graph.characters.length === 0) {
+      return '（无全局背景信息）';
+    }
+
+    const lines: string[] = [];
+
+    // 主角
+    const protagonists = graph.characters
+      .filter(c => c.role === 'protagonist')
+      .map(c => `${c.name}${c.description ? `（${c.description}）` : ''}`);
+    if (protagonists.length > 0) {
+      lines.push(`主要人物：${protagonists.join('、')}`);
+    }
+
+    // 反派
+    const antagonists = graph.characters
+      .filter(c => c.role === 'antagonist')
+      .map(c => `${c.name}${c.description ? `（${c.description}）` : ''}`);
+    if (antagonists.length > 0) {
+      lines.push(`反派人物：${antagonists.join('、')}`);
+    }
+
+    // 重要配角（最多5个）
+    const supporting = graph.characters
+      .filter(c => c.role === 'supporting')
+      .slice(0, 5)
+      .map(c => c.name);
+    if (supporting.length > 0) {
+      lines.push(`重要配角：${supporting.join('、')}`);
+    }
+
+    // 关键关系（最多5条）
+    if (graph.relationships.length > 0) {
+      const keyRels = graph.relationships
+        .slice(0, 5)
+        .map(r => {
+          // 尝试找到人物名称
+          const fromChar = graph.characters.find(c => c.id === r.from);
+          const toChar = graph.characters.find(c => c.id === r.to);
+          const fromName = fromChar?.name || r.from;
+          const toName = toChar?.name || r.to;
+          return `${fromName}与${toName}：${r.type}`;
+        });
+      lines.push(`关键关系：${keyRels.join('；')}`);
+    }
+
+    return lines.join('\n');
   }
 
   /**

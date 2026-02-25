@@ -260,6 +260,8 @@ export interface ChunkPreview {
 export interface RLMOutput {
   content: string;
   metadata?: Record<string, unknown>;
+  /** 增量收集的知识图谱（由子 Agent 在阅读过程中提取） */
+  knowledgeGraph?: KnowledgeGraph;
 }
 
 // ==================== RLM 任务配置 ====================
