@@ -155,31 +155,48 @@ interface Subtitle { text: string; start: number; end: number; }
 interface TtsData { status: TtsStatus; path?: string; subtitles?: Subtitle[]; error?: string; }
 type TtsStatus = 'idle' | 'loading' | 'done' | 'playing' | 'error';
 
-function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
+function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTtsMap, setGlobalTtsMap, onPlayingChange }: {
   content: string;
   sessionId?: string;
   chapterIdx?: number;
   initialTts?: Record<string, string>;
+  globalTtsMap: Record<string, TtsData>;
+  setGlobalTtsMap: React.Dispatch<React.SetStateAction<Record<string, TtsData>>>;
+  onPlayingChange: (isPlaying: boolean) => void;
 }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
 
-  const [ttsMap, setTtsMap] = useState<Record<number, TtsData>>(() => {
-    if (!initialTts) return {};
-    const restored: Record<number, TtsData> = {};
+  // 从全局 TTS Map 中获取当前章节的数据
+  const getTtsForSection = useCallback((sectionIdx: number): TtsData | undefined => {
+    const key = `${chapterIdx}:${sectionIdx}`;
+    return globalTtsMap[key];
+  }, [chapterIdx, globalTtsMap]);
+
+  // 初始化时从 initialTts 恢复（只在首次加载时）
+  useEffect(() => {
+    if (!initialTts || chapterIdx === undefined) return;
+    
+    const restored: Record<string, TtsData> = {};
     for (const [key, value] of Object.entries(initialTts)) {
       const parts = key.split(':');
       if (parts.length === 2 && parseInt(parts[0]) === chapterIdx) {
-        const si = parseInt(parts[1]);
-        try {
-          const p = JSON.parse(value);
-          restored[si] = { status: 'done', path: p.audioPath, subtitles: p.subtitles };
-        } catch {
-          restored[si] = { status: 'done', path: value };
+        const globalKey = `${chapterIdx}:${parts[1]}`;
+        // 只有当全局 Map 中不存在时才恢复
+        if (!globalTtsMap[globalKey]) {
+          try {
+            const p = JSON.parse(value);
+            restored[globalKey] = { status: 'done', path: p.audioPath, subtitles: p.subtitles };
+          } catch {
+            restored[globalKey] = { status: 'done', path: value };
+          }
         }
       }
     }
-    return restored;
-  });
+    
+    if (Object.keys(restored).length > 0) {
+      setGlobalTtsMap(prev => ({ ...prev, ...restored }));
+    }
+  }, [initialTts, chapterIdx, globalTtsMap, setGlobalTtsMap]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingIdx, setPlayingIdx] = useState<number | null>(null);
@@ -187,7 +204,8 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
   const subtitleRefs = useRef<Record<number, HTMLSpanElement | null>>({});
 
   const handleTts = useCallback(async (idx: number, title: string, body: string) => {
-    setTtsMap((prev) => ({ ...prev, [idx]: { status: 'loading' } }));
+    const globalKey = `${chapterIdx}:${idx}`;
+    setGlobalTtsMap((prev) => ({ ...prev, [globalKey]: { status: 'loading' } }));
     try {
       const episodeKey = `${chapterIdx}:${idx}`;
       const res = await fetch('/api/tts/episode', {
@@ -197,25 +215,31 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setTtsMap((prev) => ({
+      setGlobalTtsMap((prev) => ({
         ...prev,
-        [idx]: { status: 'done', path: data.audioPath, subtitles: data.subtitles || [] },
+        [globalKey]: { status: 'done', path: data.audioPath, subtitles: data.subtitles || [] },
       }));
     } catch (err) {
-      setTtsMap((prev) => ({
+      setGlobalTtsMap((prev) => ({
         ...prev,
-        [idx]: { status: 'error', error: err instanceof Error ? err.message : '合成失败' },
+        [globalKey]: { status: 'error', error: err instanceof Error ? err.message : '合成失败' },
       }));
     }
-  }, [sessionId, chapterIdx]);
+  }, [sessionId, chapterIdx, setGlobalTtsMap]);
 
   const handlePlay = useCallback((idx: number, audioPath: string) => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-    if (playingIdx === idx) { setPlayingIdx(null); setActiveSubIdx(-1); return; }
+    if (playingIdx === idx) { 
+      setPlayingIdx(null); 
+      setActiveSubIdx(-1); 
+      onPlayingChange(false);
+      return; 
+    }
 
     setOpenIdx(idx);
     const audio = new Audio(`/api/read/output?path=${encodeURIComponent(audioPath)}&raw=1`);
-    const subs = ttsMap[idx]?.subtitles || [];
+    const tts = getTtsForSection(idx);
+    const subs = tts?.subtitles || [];
 
     if (subs.length > 0) {
       audio.ontimeupdate = () => {
@@ -231,12 +255,13 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
       };
     }
 
-    audio.onended = () => { setPlayingIdx(null); setActiveSubIdx(-1); };
-    audio.onerror = () => { setPlayingIdx(null); setActiveSubIdx(-1); };
+    audio.onended = () => { setPlayingIdx(null); setActiveSubIdx(-1); onPlayingChange(false); };
+    audio.onerror = () => { setPlayingIdx(null); setActiveSubIdx(-1); onPlayingChange(false); };
     audio.play();
     audioRef.current = audio;
     setPlayingIdx(idx);
-  }, [playingIdx, ttsMap]);
+    onPlayingChange(true);
+  }, [playingIdx, getTtsForSection, onPlayingChange]);
 
   if (!content || content === '未找到该章节内容' || content === '加载失败') {
     return <div className={styles.previewLoading}>{content}</div>;
@@ -271,7 +296,7 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts }: {
         if (sec.title.startsWith('## ') || (!sec.body && i === 0)) return null;
 
         const isOpen = openIdx === i;
-        const tts = ttsMap[i];
+        const tts = getTtsForSection(i);
 
         return (
           <div key={i} className={styles.sectionItem}>
@@ -386,6 +411,12 @@ export default function Home() {
 
   // 实时生成内容（正在生成的章节累积内容）
   const [liveContents, setLiveContents] = useState<Record<number, string>>({});
+
+  // 全局 TTS 状态（跨章节保持，避免切换章节后丢失已合成的音频）
+  const [globalTtsMap, setGlobalTtsMap] = useState<Record<string, TtsData>>({});
+  
+  // 是否正在播放音频（用于判断是否自动切换预览）
+  const isPlayingRef = useRef(false);
 
   // 当 liveContents 更新时，自动同步到预览面板（如果正在预览 active 章节）
   useEffect(() => {
@@ -533,10 +564,14 @@ export default function Home() {
 
         setCurrentIndex(i);
 
-        // 清空该章的实时内容，自动打开预览
+        // 清空该章的实时内容
         setLiveContents((prev) => ({ ...prev, [i]: '' }));
-        setPreviewIndex(i);
-        setPreviewContent('');
+        
+        // 只有在没有播放音频时才自动切换预览到当前生成的章节
+        if (!isPlayingRef.current) {
+          setPreviewIndex(i);
+          setPreviewContent('');
+        }
 
         setChapters((prev) =>
           prev.map((ch, idx) => (idx === i ? { ...ch, status: 'active' as const } : ch))
@@ -1037,6 +1072,9 @@ export default function Home() {
                         sessionId={session?.sessionId}
                         chapterIdx={previewIndex}
                         initialTts={sessionTts}
+                        globalTtsMap={globalTtsMap}
+                        setGlobalTtsMap={setGlobalTtsMap}
+                        onPlayingChange={(isPlaying) => { isPlayingRef.current = isPlaying; }}
                       />
                     ) : chapters[previewIndex]?.status === 'active' ? (
                       <div className={styles.previewLoading}>
