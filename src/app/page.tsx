@@ -202,6 +202,8 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTts
   const [playingIdx, setPlayingIdx] = useState<number | null>(null);
   const [activeSubIdx, setActiveSubIdx] = useState(-1);
   const subtitleRefs = useRef<Record<number, HTMLSpanElement | null>>({});
+  // 存储当前播放的字幕数据，避免闭包捕获问题
+  const currentSubsRef = useRef<Subtitle[]>([]);
 
   const handleTts = useCallback(async (idx: number, title: string, body: string) => {
     const globalKey = `${chapterIdx}:${idx}`;
@@ -232,6 +234,7 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTts
     if (playingIdx === idx) { 
       setPlayingIdx(null); 
       setActiveSubIdx(-1); 
+      currentSubsRef.current = [];
       onPlayingChange(false);
       return; 
     }
@@ -240,23 +243,28 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTts
     const audio = new Audio(`/api/read/output?path=${encodeURIComponent(audioPath)}&raw=1`);
     const tts = getTtsForSection(idx);
     const subs = tts?.subtitles || [];
+    
+    // 存储到 ref，避免闭包捕获问题
+    currentSubsRef.current = subs;
 
-    if (subs.length > 0) {
-      audio.ontimeupdate = () => {
-        const t = audio.currentTime;
-        let found = -1;
-        for (let i = 0; i < subs.length; i++) {
-          if (t >= subs[i].start && t < subs[i].end) { found = i; break; }
-        }
-        setActiveSubIdx(found);
-        if (found >= 0 && subtitleRefs.current[found]) {
-          subtitleRefs.current[found]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      };
-    }
+    // 使用 ref 读取字幕，确保 ontimeupdate 回调中始终能访问正确的数据
+    audio.ontimeupdate = () => {
+      const currentSubs = currentSubsRef.current;
+      if (currentSubs.length === 0) return;
+      
+      const t = audio.currentTime;
+      let found = -1;
+      for (let i = 0; i < currentSubs.length; i++) {
+        if (t >= currentSubs[i].start && t < currentSubs[i].end) { found = i; break; }
+      }
+      setActiveSubIdx(found);
+      if (found >= 0 && subtitleRefs.current[found]) {
+        subtitleRefs.current[found]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    };
 
-    audio.onended = () => { setPlayingIdx(null); setActiveSubIdx(-1); onPlayingChange(false); };
-    audio.onerror = () => { setPlayingIdx(null); setActiveSubIdx(-1); onPlayingChange(false); };
+    audio.onended = () => { setPlayingIdx(null); setActiveSubIdx(-1); currentSubsRef.current = []; onPlayingChange(false); };
+    audio.onerror = () => { setPlayingIdx(null); setActiveSubIdx(-1); currentSubsRef.current = []; onPlayingChange(false); };
     audio.play();
     audioRef.current = audio;
     setPlayingIdx(idx);
