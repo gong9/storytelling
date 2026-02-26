@@ -334,6 +334,8 @@ export interface Chapter {
   index: number;
   /** 章节标题（如"第一章"） */
   title: string;
+  /** 章节摘要（可选） */
+  summary?: string;
   /** 章节内容 */
   content: string;
   /** 起始字符位置 */
@@ -364,8 +366,10 @@ export interface DeepReaderConfig {
   task: DeepReadTaskConfig;
   /** 章节切分大小（如果无法识别章节标记时使用，默认 5000） */
   chapterSize?: number;
-  /** 模型 */
+  /** Commander/Writer 模型（需要较强的理解和创作能力，默认 qwen-plus） */
   model?: string;
+  /** RLM 速读模型（只需调度能力，默认 qwen-turbo，更快更便宜） */
+  rlmModel?: string;
   /** API Base URL */
   baseURL?: string;
   /** 是否启用速读预览（生成全局上下文，默认 true） */

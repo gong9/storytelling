@@ -86,7 +86,8 @@ const DEFAULT_CONFIG: Required<DeepReaderConfig> = {
     maxOutputPerChapter: 5000,
   },
   chapterSize: 5000,
-  model: process.env.OPENAI_MODEL || 'qwen-plus',
+  model: process.env.OPENAI_MODEL || 'qwen-plus',  // Commander/Writer 用较强模型
+  rlmModel: 'qwen-turbo',  // RLM 速读用更快更便宜的模型
   baseURL: process.env.OPENAI_API_BASE || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   enablePreview: true,
   previewMaxWords: 2000,
@@ -211,6 +212,7 @@ export class DeepReader {
   private currentChapter: Chapter | null = null;
   private segments: Segment[] = [];
   private processedSegments: Set<number> = new Set();
+  private segmentOutputs: Map<number, { title: string; content: string }> = new Map(); // 按 segmentId 存储输出
   private output: string = '';
   private previousSummary: string = '';
   private outputStream: fs.WriteStream | null = null;
@@ -221,6 +223,7 @@ export class DeepReader {
       task: { ...DEFAULT_CONFIG.task, ...config.task },
       chapterSize: config.chapterSize || DEFAULT_CONFIG.chapterSize,
       model: config.model || DEFAULT_CONFIG.model,
+      rlmModel: config.rlmModel || DEFAULT_CONFIG.rlmModel,
       baseURL: config.baseURL || DEFAULT_CONFIG.baseURL,
       enablePreview: config.enablePreview ?? DEFAULT_CONFIG.enablePreview,
       previewMaxWords: config.previewMaxWords || DEFAULT_CONFIG.previewMaxWords,
@@ -301,16 +304,17 @@ export class DeepReader {
       return { context: '', chapters: [] };
     }
 
-    console.log('[DeepReader] 生成全局上下文 + 智能章节划分...');
+    console.log(`[DeepReader] 生成全局上下文 + 智能章节划分（RLM 使用 ${this.config.rlmModel}）...`);
 
     // 主 Agent 只需阅读全文，章节由子 Agent 增量识别
+    // RLM 任务相对简单（调度 + 汇总），使用更快更便宜的模型
     const reader = new RLMReader({
       task: {
         ...TASK_SUMMARY,
         purpose: '全面阅读文档，理解故事结构。子 Agent 会自动识别章节边界。',
         outputFormat: '阅读完成后，直接调用 done() 结束任务即可。章节划分由子 Agent 自动提取。',
       },
-      model: this.config.model,
+      model: this.config.rlmModel,  // RLM 用更快的模型
       baseURL: this.config.baseURL,
       enableCheckpoint: false,
     });
@@ -541,14 +545,11 @@ ${input.writingHints}
     // 标记已处理
     this.processedSegments.add(input.segmentId);
 
-    // 写入输出（带小节标题）
-    const sectionTitle = `### ${input.sceneTitle}\n\n`;
-    if (this.outputStream) {
-      this.outputStream.write(sectionTitle);
-      this.outputStream.write(generatedContent);
-      this.outputStream.write('\n\n');
-    }
-    this.output += sectionTitle + generatedContent + '\n\n';
+    // 存入 Map（按 segmentId 存储，最后按顺序合并）
+    this.segmentOutputs.set(input.segmentId, {
+      title: input.sceneTitle,
+      content: generatedContent,
+    });
 
     console.log(`    [Writer] 完成，输出 ${generatedContent.length} 字`);
 
@@ -590,6 +591,7 @@ ${input.writingHints}
     this.currentChapter = chapter;
     this.segments = this.splitChapterIntoSegments(chapter);
     this.processedSegments = new Set();
+    this.segmentOutputs = new Map(); // 清空 Map，按 segmentId 存储输出
     this.output = '';
     this.toolCallCount = 0;
 
@@ -665,6 +667,60 @@ ${input.writingHints}
       // 递归限制到达，检查是否已完成足够内容
       console.log(`  [警告] 递归限制到达，已处理 ${this.processedSegments.size}/${this.segments.length} 个片段`);
     }
+
+    // =============================================
+    // 🔴 关键修复：强制补全遗漏的片段，确保内容完整
+    // =============================================
+    const missedSegments = this.segments.filter(s => !this.processedSegments.has(s.id));
+    if (missedSegments.length > 0) {
+      console.log(`  [补全] ⚠️ 检测到 ${missedSegments.length} 个遗漏片段，开始强制补全...`);
+      
+      for (const segment of missedSegments) {
+        console.log(`  [补全] 处理遗漏片段 ${segment.id}/${this.segments.length}（${segment.content.length} 字）`);
+        
+        // 根据片段内容生成场景标题
+        const preview = segment.preview.replace(/\.\.\.$/, '');
+        const sceneTitle = `第${segment.id}回：${preview.slice(0, 15)}`;
+        const writingHints = '请完整改写这段内容，不要遗漏任何情节和对话。';
+        
+        onProgress?.({ type: 'segment_start', segmentId: segment.id, totalSegments: this.segments.length });
+        
+        try {
+          const result = await this.handleSpawnWriter({
+            segmentId: segment.id,
+            sceneTitle,
+            writingHints,
+          });
+          
+          const sectionOutput = `### ${sceneTitle}\n\n${result.generatedText}`;
+          onProgress?.({
+            type: 'segment_done',
+            segmentId: segment.id,
+            totalSegments: this.segments.length,
+            charCount: result.charCount,
+            segmentContent: sectionOutput,
+            segmentTitle: sceneTitle,
+          });
+        } catch (err) {
+          console.error(`  [补全] 片段 ${segment.id} 处理失败:`, err);
+        }
+      }
+      
+      console.log(`  [补全] ✓ 所有遗漏片段已处理完成`);
+    }
+
+    // =============================================
+    // 🔴 关键：按 segmentId 排序合并输出，确保顺序正确
+    // =============================================
+    const sortedIds = [...this.segmentOutputs.keys()].sort((a, b) => a - b);
+    const sortedOutput = sortedIds.map(id => {
+      const seg = this.segmentOutputs.get(id)!;
+      return `### ${seg.title}\n\n${seg.content}`;
+    }).join('\n\n');
+    
+    this.output = sortedOutput;
+    
+    console.log(`  [排序] ✓ 已按片段顺序合并 ${sortedIds.length} 个片段，共 ${this.output.length} 字`);
 
     // 提取本章摘要
     const summary = this.output.slice(0, 200);
