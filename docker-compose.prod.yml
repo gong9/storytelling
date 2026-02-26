@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  storytelling:
+    image: storytelling:latest
+    container_name: storytelling-app
+    ports:
+      - "8001:3100"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3100
+    volumes:
+      # 持久化输出目录（音频、深度阅读结果等）
+      - ./out:/app/out
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

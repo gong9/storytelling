@@ -378,7 +378,7 @@ export class RLMReader {
         model: llm,
       });
 
-      const result = await withTimeout(
+      const result: { messages?: { content: string }[] } = await withTimeout(
         subAgent.invoke({
           messages: [{
             role: 'user',

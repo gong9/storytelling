@@ -2,7 +2,9 @@ node_modules
 demo
 out
 .env
+!.env.example
 .cursor
 .next
 .sessions
 docs/*
+demo.txt
