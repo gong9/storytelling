@@ -12,7 +12,7 @@ echo "=== 导出镜像 ==="
 docker save -o $IMAGE_TAR storytelling:latest-amd64
 
 echo "=== 上传到服务器 ==="
-ssh $SERVER "mkdir -p $REMOTE_DIR/out"
+ssh $SERVER "mkdir -p $REMOTE_DIR/out/audio $REMOTE_DIR/out/deep $REMOTE_DIR/.sessions && chmod -R 777 $REMOTE_DIR/out $REMOTE_DIR/.sessions"
 scp $IMAGE_TAR .env docker-compose.prod.yml $SERVER:$REMOTE_DIR/
 
 echo "=== 部署服务 ==="
