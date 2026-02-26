@@ -155,11 +155,10 @@ interface Subtitle { text: string; start: number; end: number; }
 interface TtsData { status: TtsStatus; path?: string; subtitles?: Subtitle[]; error?: string; }
 type TtsStatus = 'idle' | 'loading' | 'done' | 'playing' | 'error';
 
-function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTtsMap, setGlobalTtsMap, onPlayingChange }: {
+function PreviewSections({ content, sessionId, chapterIdx, globalTtsMap, setGlobalTtsMap, onPlayingChange }: {
   content: string;
   sessionId?: string;
   chapterIdx?: number;
-  initialTts?: Record<string, string>;
   globalTtsMap: Record<string, TtsData>;
   setGlobalTtsMap: React.Dispatch<React.SetStateAction<Record<string, TtsData>>>;
   onPlayingChange: (isPlaying: boolean) => void;
@@ -172,31 +171,8 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTts
     return globalTtsMap[key];
   }, [chapterIdx, globalTtsMap]);
 
-  // 初始化时从 initialTts 恢复（只在首次加载时）
-  useEffect(() => {
-    if (!initialTts || chapterIdx === undefined) return;
-    
-    const restored: Record<string, TtsData> = {};
-    for (const [key, value] of Object.entries(initialTts)) {
-      const parts = key.split(':');
-      if (parts.length === 2 && parseInt(parts[0]) === chapterIdx) {
-        const globalKey = `${chapterIdx}:${parts[1]}`;
-        // 只有当全局 Map 中不存在时才恢复
-        if (!globalTtsMap[globalKey]) {
-          try {
-            const p = JSON.parse(value);
-            restored[globalKey] = { status: 'done', path: p.audioPath, subtitles: p.subtitles };
-          } catch {
-            restored[globalKey] = { status: 'done', path: value };
-          }
-        }
-      }
-    }
-    
-    if (Object.keys(restored).length > 0) {
-      setGlobalTtsMap(prev => ({ ...prev, ...restored }));
-    }
-  }, [initialTts, chapterIdx, globalTtsMap, setGlobalTtsMap]);
+  // 注意：TTS 数据的恢复已在 handleRestore 中完成（父组件直接设置 globalTtsMap）
+  // 这里不再需要额外的恢复逻辑
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingIdx, setPlayingIdx] = useState<number | null>(null);
@@ -226,6 +202,33 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTts
         ...prev,
         [globalKey]: { status: 'error', error: err instanceof Error ? err.message : '合成失败' },
       }));
+    }
+  }, [sessionId, chapterIdx, setGlobalTtsMap]);
+
+  // 重新生成字幕（对已有音频）
+  const [regenIdx, setRegenIdx] = useState<number | null>(null);
+  const handleRegenSubtitles = useCallback(async (idx: number, audioPath: string) => {
+    const globalKey = `${chapterIdx}:${idx}`;
+    setRegenIdx(idx);
+    try {
+      const episodeKey = `${chapterIdx}:${idx}`;
+      const res = await fetch('/api/tts/regenerate-subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioPath, sessionId, episodeKey }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      if (data.subtitles && data.subtitles.length > 0) {
+        setGlobalTtsMap((prev) => ({
+          ...prev,
+          [globalKey]: { ...prev[globalKey], subtitles: data.subtitles },
+        }));
+      }
+    } catch (err) {
+      console.error('重新生成字幕失败:', err);
+    } finally {
+      setRegenIdx(null);
     }
   }, [sessionId, chapterIdx, setGlobalTtsMap]);
 
@@ -349,6 +352,23 @@ function PreviewSections({ content, sessionId, chapterIdx, initialTts, globalTts
                         </svg>
                       )}
                     </button>
+                    {/* 如果没有字幕，显示重新生成按钮 */}
+                    {(!tts.subtitles || tts.subtitles.length === 0) && (
+                      <button
+                        className={styles.ttsBtn}
+                        onClick={() => handleRegenSubtitles(i, tts.path!)}
+                        disabled={regenIdx === i}
+                        title="生成字幕"
+                      >
+                        {regenIdx === i ? (
+                          <div className={styles.spinnerSmall} />
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M4 7h16M4 12h16M4 17h10" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
                     <a
                       className={styles.ttsBtn}
                       href={`/api/read/output?path=${encodeURIComponent(tts.path)}&raw=1`}
@@ -478,6 +498,10 @@ export default function Home() {
     setLogs([]);
     setInitStage('正在上传...');
     setInitToolCount(0);
+    // 清空之前的 TTS 数据
+    setGlobalTtsMap({});
+    setSessionTts({});
+    setLiveContents({});
 
     try {
       const formData = new FormData();
@@ -722,11 +746,24 @@ export default function Home() {
         );
       }
 
-      // 恢复 TTS 结果
+      // 恢复 TTS 结果到全局状态
       if (data.session?.ttsResults) {
         setSessionTts(data.session.ttsResults);
+        
+        // 直接恢复到 globalTtsMap，避免组件内逐个恢复的问题
+        const restored: Record<string, TtsData> = {};
+        for (const [key, value] of Object.entries(data.session.ttsResults)) {
+          try {
+            const p = JSON.parse(value as string);
+            restored[key] = { status: 'done', path: p.audioPath, subtitles: p.subtitles };
+          } catch {
+            restored[key] = { status: 'done', path: value as string };
+          }
+        }
+        setGlobalTtsMap(restored);
       } else {
         setSessionTts({});
+        setGlobalTtsMap({});
       }
 
       setLogs([]);
@@ -1079,7 +1116,6 @@ export default function Home() {
                         content={previewContent}
                         sessionId={session?.sessionId}
                         chapterIdx={previewIndex}
-                        initialTts={sessionTts}
                         globalTtsMap={globalTtsMap}
                         setGlobalTtsMap={setGlobalTtsMap}
                         onPlayingChange={(isPlaying) => { isPlayingRef.current = isPlaying; }}

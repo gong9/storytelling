@@ -114,15 +114,33 @@ interface Subtitle {
   end: number;
 }
 
-async function transcribeAudio(audioFilePath: string): Promise<Subtitle[]> {
+async function transcribeAudio(audioFilePath: string, audioUrl?: string): Promise<Subtitle[]> {
   const apiKey = getDashscopeKey();
 
   try {
-    // Step 1: 上传音频文件获取 file URL（用 base64 直接传）
-    const audioBuffer = fs.readFileSync(audioFilePath);
-    const base64Audio = audioBuffer.toString('base64');
+    let fileUrl: string;
+    
+    // 优先使用 HTTP URL（无大小限制），否则用 Base64（有 10MB 限制）
+    if (audioUrl) {
+      fileUrl = audioUrl;
+      console.log(`[ASR] 使用 HTTP URL: ${audioUrl}`);
+    } else {
+      // 回退到 Base64（本地开发时）
+      const audioBuffer = fs.readFileSync(audioFilePath);
+      
+      // Base64 编码后约增大 33%，DashScope 限制 10MB
+      const MAX_FILE_SIZE = 7 * 1024 * 1024; // 7MB 安全阈值
+      if (audioBuffer.length > MAX_FILE_SIZE) {
+        console.log(`[ASR] 文件过大 (${(audioBuffer.length / 1024 / 1024).toFixed(1)}MB > 7MB)，无公网 URL，跳过 ASR`);
+        return [];
+      }
+      
+      const base64Audio = audioBuffer.toString('base64');
+      fileUrl = `data:audio/mp3;base64,${base64Audio}`;
+      console.log(`[ASR] 使用 Base64 (${(audioBuffer.length / 1024 / 1024).toFixed(1)}MB)`);
+    }
 
-    // Step 2: 调用 Paraformer 识别（必须异步模式）
+    // 调用 Paraformer 识别（必须异步模式）
     const response = await fetch(`${DASHSCOPE_API_BASE}/services/audio/asr/transcription`, {
       method: 'POST',
       headers: {
@@ -133,7 +151,7 @@ async function transcribeAudio(audioFilePath: string): Promise<Subtitle[]> {
       body: JSON.stringify({
         model: 'paraformer-v2',
         input: {
-          file_urls: [`data:audio/mp3;base64,${base64Audio}`],
+          file_urls: [fileUrl],
         },
         parameters: {
           language_hints: ['zh'],
@@ -328,7 +346,14 @@ export async function POST(request: NextRequest) {
     // 2. ASR 识别获取字幕时间戳
     let subtitles: Subtitle[] = [];
     try {
-      subtitles = await transcribeAudio(filePath);
+      // 构建公网可访问的 URL（用于 DashScope 下载音频）
+      // 优先使用环境变量中的 PUBLIC_URL，否则使用请求的 host
+      const host = request.headers.get('host') || 'localhost:3000';
+      const protocol = host.includes('localhost') ? 'http' : 'http'; // 服务器也是 http
+      const publicBaseUrl = process.env.PUBLIC_URL || `${protocol}://${host}`;
+      const audioPublicUrl = `${publicBaseUrl}/api/read/output?path=${encodeURIComponent(audioPath)}&raw=1`;
+      
+      subtitles = await transcribeAudio(filePath, audioPublicUrl);
       console.log(`[TTS Episode] 字幕: ${subtitles.length} 条`);
     } catch (err) {
       console.error('[TTS Episode] ASR 失败，跳过字幕:', err);
